@@ -30,8 +30,5 @@ The following resources are recommended to enhance your learning experience duri
 Title/Link | Topics | Type of Resource
 --------------------------------------
 Bioinformatics and Functional Genomics, Ed. 3 | Sequence Alignment, Database Searches, Phylogeny | Textbook
-----------------------------------------------------------------------------------------------------------
 Applied Bioinformatics, Ed. 2 | Databases, Sequence Alignment, Phylogeny, Structural Bioinformatics | Textbook
---------------------------------------------------------------------------------------------------------------
 Understanding Bioinformatics | Sequence Alignment, Phylogeny | Textbook
------------------------------------------------------------------------
