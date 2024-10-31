@@ -27,8 +27,8 @@ Last modified on 2024/10/07 by Onur Serçinoğlu.
 
 The following resources are recommended to enhance your learning experience during this course.
 
-Title/Link | Topics | Type of Resource
---------------------------------------
+| Title/Link | Topics | Type of Resource |
+------------|---------|-----------------
 Bioinformatics and Functional Genomics, Ed. 3 | Sequence Alignment, Database Searches, Phylogeny | Textbook
 Applied Bioinformatics, Ed. 2 | Databases, Sequence Alignment, Phylogeny, Structural Bioinformatics | Textbook
 Understanding Bioinformatics | Sequence Alignment, Phylogeny | Textbook
