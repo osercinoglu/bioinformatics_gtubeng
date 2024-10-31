@@ -32,5 +32,5 @@ The following resources are recommended to enhance your learning experience duri
 Bioinformatics and Functional Genomics, Ed. 3 | Sequence Alignment, Database Searches, Phylogeny | Textbook
 Applied Bioinformatics, Ed. 2 | Databases, Sequence Alignment, Phylogeny, Structural Bioinformatics | Textbook
 Understanding Bioinformatics | Sequence Alignment, Phylogeny | Textbook
-[An Introduction to Applied Bioinformatics](https://readiab.org/introduction.html){target="_blank"} | Sequence Alignment, Machine learning | Textbook, Coding exercises
+[An Introduction to Applied Bioinformatics](https://readiab.org/introduction.html) | Sequence Alignment, Machine learning | Textbook, Coding exercises
 
