@@ -1,4 +1,6 @@
-# What is this repository all about? 
+# Bioinformatics Learning Resources and Exercises
+
+## What is this repository all about? 
 
 This repository stores bioinformatics exercises for two courses taught at Gebze Technical University in Fall 2024 Semester:
 * BSB511 - Bioinformatics Fundamentals, a graduate-level course taught at GTU Bioinformatics and Systems Biology Graduate Program.
@@ -15,7 +17,7 @@ While the two courses share the same theoretical content, the skills required to
 
 There will also be project tasks assigned to groups of students later on during the semester. More information about this will be shared in due time. Stay tuned!
 
-# Contact
+## Contact
 
 In case of any problems with the exercises, you can use the Issues tab or directly contact the course instructor.
 
