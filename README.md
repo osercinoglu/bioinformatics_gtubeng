@@ -33,4 +33,5 @@ Bioinformatics and Functional Genomics, Ed. 3 | Sequence Alignment, Database Sea
 Applied Bioinformatics, Ed. 2 | Databases, Sequence Alignment, Phylogeny, Structural Bioinformatics | Textbook
 Understanding Bioinformatics | Sequence Alignment, Phylogeny | Textbook
 [An Introduction to Applied Bioinformatics](https://readiab.org/introduction.html) | Sequence Alignment, Machine learning | Textbook, Coding exercises
+[Foundations of Computational and Systems Biology (Spring 2014)](https://ocw.mit.edu/courses/7-91j-foundations-of-computational-and-systems-biology-spring-2014/video_galleries/video-lectures/) | Sequence Alignment, Phylogeny | Video Lectures
 
