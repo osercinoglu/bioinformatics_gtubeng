@@ -29,9 +29,9 @@ The following resources are recommended to enhance your learning experience duri
 
 | Title/Link | Topics | Type of Resource |
 ------------|---------|-----------------
-Bioinformatics and Functional Genomics, Ed. 3 | Sequence Alignment, Database Searches, Phylogeny | Textbook
-Applied Bioinformatics, Ed. 2 | Databases, Sequence Alignment, Phylogeny, Structural Bioinformatics | Textbook
-Understanding Bioinformatics | Sequence Alignment, Phylogeny | Textbook
+[Bioinformatics and Functional Genomics, Ed. 3](https://www.wiley.com/en-ca/Bioinformatics+and+Functional+Genomics%2C+3rd+Edition-p-9781118581780) | Sequence Alignment, Database Searches, Phylogeny | Textbook
+[Applied Bioinformatics: An Introductrion. Ed. 2](https://link.springer.com/book/10.1007/978-3-319-68301-0) | Databases, Sequence Alignment, Phylogeny, Structural Bioinformatics | Textbook
+[Understanding Bioinformatics](https://www.routledge.com/Understanding-Bioinformatics/Zvelebil-Baum/p/book/9780815340249?srsltid=AfmBOooRKPbbwr2XLz3r4F8Uiv0cxFQn6fgQqsxhM5fi29Kywtu3Wpvq) | Sequence Alignment, Phylogeny | Textbook
 [An Introduction to Applied Bioinformatics](https://readiab.org/introduction.html) | Sequence Alignment, Machine learning | Textbook, Coding exercises
 [Foundations of Computational and Systems Biology (Spring 2014)](https://ocw.mit.edu/courses/7-91j-foundations-of-computational-and-systems-biology-spring-2014/video_galleries/video-lectures/) | Sequence Alignment, Phylogeny | Video Lectures
 
