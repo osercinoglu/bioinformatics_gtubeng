@@ -36,5 +36,8 @@ The following resources are recommended to enhance your learning experience duri
 [An Introduction to Applied Bioinformatics](https://readiab.org/introduction.html) | Sequence Alignment, Machine learning | Textbook, Coding exercises
 [Foundations of Computational and Systems Biology (Spring 2014)](https://ocw.mit.edu/courses/7-91j-foundations-of-computational-and-systems-biology-spring-2014/video_galleries/video-lectures/) | Sequence Alignment, Phylogeny | Video Lectures
 [What is phylogenetics?](https://www.ebi.ac.uk/training/online/courses/introduction-to-phylogenetics/what-is-phylogenetics/) | Phylogeny | Tutorial
+[Protein structural bioinformatics: an overview](https://doi.org/10.1016/j.compbiomed.2022.105695) | Structural bioinformatics | Paper
+
+
 
 
