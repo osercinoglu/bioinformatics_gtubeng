@@ -21,8 +21,6 @@ There will also be project tasks assigned to groups of students later on during 
 
 In case of any problems with the exercises, you can use the Issues tab or directly contact the course instructor.
 
-Last modified on 2024/10/07 by Onur Serçinoğlu.
-
 ## Recommended Resources
 
 The following resources are recommended to enhance your learning experience during this course.
