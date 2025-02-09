@@ -43,6 +43,7 @@ The following resources are recommended to enhance your learning experience duri
 [Protein structural bioinformatics: an overview](https://doi.org/10.1016/j.compbiomed.2022.105695) | Structural bioinformatics | Paper
 [Introduction to structural bioinformatics](https://research.vu.nl/en/publications/preface-to-introduction-to-structural-bioinformatics) | Structural bioinformatics | Textbook
 [Before and After AlphaFold 2: an overview of protein structure prediction](https://pmc.ncbi.nlm.nih.gov/articles/PMC10011655/) | Structural bioinformatics | Paper
+[Introduction to Bioinformatics and Computational Biology](https://liulab-dfci.github.io/bioinfo-combio/)| Sequence Alignment, Database Searches, Genomics, Phylogeny, Video Lectures
 
 
 
