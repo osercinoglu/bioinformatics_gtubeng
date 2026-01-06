@@ -27,25 +27,6 @@ Homeworks handed out as part of the course (both current and past) can be found 
 
 ## Recommended Resources
 
-The following resources are recommended to enhance your learning experience during this course.
-
-| Title/Link | Topics | Type of Resource |
-------------|---------|-----------------
-[Bioinformatics for the terrified](https://www.ebi.ac.uk/training/online/courses/bioinformatics-terrified/what-bioinformatics/) | Introduction | Tutorial
-[Bioinformatics and Functional Genomics, Ed. 3](https://www.wiley.com/en-ca/Bioinformatics+and+Functional+Genomics%2C+3rd+Edition-p-9781118581780) | Sequence Alignment, Database Searches, Phylogeny | Textbook (**strongly recommended**)
-[Applied Bioinformatics: An Introduction. Ed. 2](https://link.springer.com/book/10.1007/978-3-319-68301-0) | Databases, Sequence Alignment, Phylogeny, Structural Bioinformatics | Textbook
-[Understanding Bioinformatics](https://www.routledge.com/Understanding-Bioinformatics/Zvelebil-Baum/p/book/9780815340249?srsltid=AfmBOooRKPbbwr2XLz3r4F8Uiv0cxFQn6fgQqsxhM5fi29Kywtu3Wpvq) | Sequence Alignment, Phylogeny | Textbook
-[Bioinformatics Lecture Slides](https://bioboot.github.io/bimm143_W20/) | Sequence Alignment, Databases Searches, Phylogeny | Lecture Slides (**strongly recommended**) 
-[Bioinformatics, Ed. 4](https://www.wiley.com/en-gb/Bioinformatics%2C+4th+Edition-p-9781119335580) | Sequence Alignment, Database Searches, Phylogengy, Structural Bioinformatics | Textbook
-[An Introduction to Applied Bioinformatics](https://readiab.org/introduction.html) | Sequence Alignment, Machine learning | Textbook, Coding exercises
-[Foundations of Computational and Systems Biology (Spring 2014)](https://ocw.mit.edu/courses/7-91j-foundations-of-computational-and-systems-biology-spring-2014/video_galleries/video-lectures/) | Sequence Alignment, Phylogeny | Video Lectures
-[What is phylogenetics?](https://www.ebi.ac.uk/training/online/courses/introduction-to-phylogenetics/what-is-phylogenetics/) | Phylogeny | Tutorial
-[Protein structural bioinformatics: an overview](https://doi.org/10.1016/j.compbiomed.2022.105695) | Structural bioinformatics | Paper
-[Introduction to structural bioinformatics](https://research.vu.nl/en/publications/preface-to-introduction-to-structural-bioinformatics) | Structural bioinformatics | Textbook
-[Before and After AlphaFold 2: an overview of protein structure prediction](https://pmc.ncbi.nlm.nih.gov/articles/PMC10011655/) | Structural bioinformatics | Paper
-[Introduction to Bioinformatics and Computational Biology](https://liulab-dfci.github.io/bioinfo-combio/)| Sequence Alignment, Database Searches, Genomics, Phylogeny, Video Lectures
-
-
-
+[Click here](https://www.notion.so/2dfe0565354980c2a46be6b3eb939298?v=2dfe056535498071b361000c58cc2d31&source=copy_link) to view a Notion table that includes a database of bioinformatics learning resources.
 
 
