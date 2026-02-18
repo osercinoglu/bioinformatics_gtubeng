@@ -10,11 +10,6 @@ The jupyter notebooks containing the exercises can be found in folder "exercises
 
 Lecture Slides are shared via MS Teams groups created for these courses.
 
-While the two courses share the same theoretical content, the skills required to complete the course successfully differ:
-
-* Homework exercises for BENG451 focuses solely on achieving a basic understanding of the relevant bioinformatics methods, and no particular coding skills are required. One can basically complete each task by using web interfaces of the required tools. However, those interested in delving deeper into the coding aspects may also prefer to complete coding homeworks assigned to BSB511 students. Bonus points will be added to the final grade for students who choose to complete homeworks this way.
-* Homework exercises for BSB511 requires more than a demonstration of a basic understanding: the student should also show acquiral of coding skills for achieve pre-defined bioinformatics tasks.
-
 There will also be project tasks assigned to groups of students later on during the semester. More information about this will be shared in due time. Stay tuned!
 
 ## Contact
