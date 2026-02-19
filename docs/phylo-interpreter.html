@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Phylogenetic Tree Interpreter — BSB511 / BENG451</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; }
+    .back-link {
+      position: fixed; top: 12px; left: 12px; z-index: 1000;
+      padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 700;
+      background: rgba(15,23,42,0.85); color: #94A3B8; text-decoration: none;
+      border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(8px);
+      font-family: 'Inter', sans-serif; transition: all 0.2s;
+    }
+    .back-link:hover { color: #E2E8F0; border-color: rgba(255,255,255,0.3); }
+  </style>
+</head>
+<body>
+  <a href="index.html" class="back-link">← All Widgets</a>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useMemo, useCallback, useRef, useEffect } = React;
+
+    
+    /* ─── preset distance matrices ─── */
+    const PRESETS = {
+      "Globins (5 species)": {
+        labels: ["Human", "Horse", "Whale", "Rabbit", "Kangaroo"],
+        matrix: [
+          [0, 17, 21, 10, 33],
+          [17, 0, 25, 22, 38],
+          [21, 25, 0, 26, 40],
+          [10, 22, 26, 0, 35],
+          [33, 38, 40, 35, 0],
+        ],
+        description: "Hemoglobin β-chain amino acid differences across 5 mammals"
+      },
+      "Primates": {
+        labels: ["Human", "Chimp", "Gorilla", "Orangutan", "Gibbon"],
+        matrix: [
+          [0, 1.45, 2.06, 4.73, 6.17],
+          [1.45, 0, 2.14, 4.81, 6.25],
+          [2.06, 2.14, 0, 4.38, 5.93],
+          [4.73, 4.81, 4.38, 0, 6.76],
+          [6.17, 6.25, 5.93, 6.76, 0],
+        ],
+        description: "Cytochrome c substitutions per 100 residues among primates"
+      },
+      "Bacteria (4 sp.)": {
+        labels: ["E.coli", "S.aureus", "B.subtilis", "M.tuber."],
+        matrix: [
+          [0, 0.62, 0.56, 0.77],
+          [0.62, 0, 0.44, 0.72],
+          [0.56, 0.44, 0, 0.68],
+          [0.77, 0.72, 0.68, 0],
+        ],
+        description: "16S rRNA evolutionary distances (Jukes-Cantor)"
+      },
+      "Custom": null
+    };
+    
+    /* ─── UPGMA ─── */
+    function runUPGMA(labels, matrix) {
+      const n = labels.length;
+      let dist = matrix.map(r => [...r]);
+      let clusters = labels.map((l, i) => ({ id: i, label: l, children: null, height: 0, size: 1 }));
+      const steps = [];
+      let nextId = n;
+    
+      while (clusters.length > 1) {
+        const k = clusters.length;
+        let minD = Infinity, mi = -1, mj = -1;
+        for (let i = 0; i < k; i++) {
+          for (let j = i + 1; j < k; j++) {
+            if (dist[i][j] < minD) { minD = dist[i][j]; mi = i; mj = j; }
+          }
+        }
+    
+        const height = minD / 2;
+        const newCluster = {
+          id: nextId++,
+          label: `(${clusters[mi].label},${clusters[mj].label})`,
+          children: [clusters[mi], clusters[mj]],
+          height,
+          size: clusters[mi].size + clusters[mj].size,
+          mergedDist: minD
+        };
+    
+        steps.push({
+          merged: [clusters[mi].label, clusters[mj].label],
+          distance: minD,
+          height,
+          distSnapshot: dist.map(r => [...r]),
+          clusterLabels: clusters.map(c => c.label),
+          newLabel: newCluster.label
+        });
+    
+        const newDist = [];
+        const newClusters = [];
+        for (let i = 0; i < k; i++) {
+          if (i !== mi && i !== mj) newClusters.push(clusters[i]);
+        }
+        newClusters.push(newCluster);
+    
+        const nn = newClusters.length;
+        for (let i = 0; i < nn; i++) {
+          newDist.push(new Array(nn).fill(0));
+        }
+    
+        const oldIndices = [];
+        for (let i = 0; i < k; i++) {
+          if (i !== mi && i !== mj) oldIndices.push(i);
+        }
+    
+        for (let i = 0; i < oldIndices.length; i++) {
+          for (let j = i + 1; j < oldIndices.length; j++) {
+            newDist[i][j] = dist[oldIndices[i]][oldIndices[j]];
+            newDist[j][i] = newDist[i][j];
+          }
+        }
+    
+        for (let i = 0; i < oldIndices.length; i++) {
+          const oi = oldIndices[i];
+          const d = (dist[oi][mi] * clusters[mi].size + dist[oi][mj] * clusters[mj].size) / (clusters[mi].size + clusters[mj].size);
+          newDist[i][nn - 1] = d;
+          newDist[nn - 1][i] = d;
+        }
+    
+        dist = newDist;
+        clusters = newClusters;
+      }
+    
+      return { tree: clusters[0], steps };
+    }
+    
+    /* ─── Neighbor-Joining ─── */
+    function runNJ(labels, matrix) {
+      const n = labels.length;
+      let dist = matrix.map(r => [...r]);
+      let nodes = labels.map((l, i) => ({ id: i, label: l, children: null, branchLength: 0 }));
+      const steps = [];
+      let nextId = n;
+    
+      while (nodes.length > 2) {
+        const k = nodes.length;
+    
+        const r = new Array(k).fill(0);
+        for (let i = 0; i < k; i++) {
+          for (let j = 0; j < k; j++) r[i] += dist[i][j];
+        }
+    
+        let minQ = Infinity, mi = -1, mj = -1;
+        const Q = Array.from({ length: k }, () => new Array(k).fill(0));
+        for (let i = 0; i < k; i++) {
+          for (let j = i + 1; j < k; j++) {
+            Q[i][j] = (k - 2) * dist[i][j] - r[i] - r[j];
+            Q[j][i] = Q[i][j];
+            if (Q[i][j] < minQ) { minQ = Q[i][j]; mi = i; mj = j; }
+          }
+        }
+    
+        const diu = dist[mi][mj] / 2 + (r[mi] - r[mj]) / (2 * (k - 2));
+        const dju = dist[mi][mj] - diu;
+    
+        const childI = { ...nodes[mi], branchLength: Math.max(0, diu) };
+        const childJ = { ...nodes[mj], branchLength: Math.max(0, dju) };
+        const newNode = {
+          id: nextId++,
+          label: `(${nodes[mi].label},${nodes[mj].label})`,
+          children: [childI, childJ],
+          branchLength: 0
+        };
+    
+        steps.push({
+          merged: [nodes[mi].label, nodes[mj].label],
+          qMatrix: Q.map(r => [...r]),
+          minQ,
+          branchLengths: [diu, dju],
+          clusterLabels: nodes.map(n => n.label),
+          distSnapshot: dist.map(r => [...r]),
+          rValues: [...r]
+        });
+    
+        const newDist = [];
+        const newNodes = [];
+        const oldIndices = [];
+        for (let i = 0; i < k; i++) {
+          if (i !== mi && i !== mj) { newNodes.push(nodes[i]); oldIndices.push(i); }
+        }
+        newNodes.push(newNode);
+    
+        const nn = newNodes.length;
+        for (let i = 0; i < nn; i++) newDist.push(new Array(nn).fill(0));
+    
+        for (let i = 0; i < oldIndices.length; i++) {
+          for (let j = i + 1; j < oldIndices.length; j++) {
+            newDist[i][j] = dist[oldIndices[i]][oldIndices[j]];
+            newDist[j][i] = newDist[i][j];
+          }
+        }
+    
+        for (let i = 0; i < oldIndices.length; i++) {
+          const oi = oldIndices[i];
+          const d = (dist[oi][mi] + dist[oi][mj] - dist[mi][mj]) / 2;
+          newDist[i][nn - 1] = d;
+          newDist[nn - 1][i] = d;
+        }
+    
+        dist = newDist;
+        nodes = newNodes;
+      }
+    
+      if (nodes.length === 2) {
+        const finalDist = dist[0][1];
+        nodes[0].branchLength = finalDist / 2;
+        nodes[1].branchLength = finalDist / 2;
+        const root = { id: nextId, label: "root", children: [nodes[0], nodes[1]], branchLength: 0 };
+        return { tree: root, steps };
+      }
+    
+      return { tree: nodes[0], steps };
+    }
+    
+    /* ─── Tree rendering (recursive, horizontal) ─── */
+    function getLeafCount(node) {
+      if (!node.children) return 1;
+      return node.children.reduce((sum, c) => sum + getLeafCount(c), 0);
+    }
+    
+    function getMaxDepth(node, depth = 0) {
+      if (!node.children) return depth;
+      return Math.max(...node.children.map(c => getMaxDepth(c, depth + (node.height || node.branchLength || 0.5))));
+    }
+    
+    function layoutTree(node, yStart, yEnd, xScale, maxH, isUPGMA) {
+      const elements = [];
+      const midY = (yStart + yEnd) / 2;
+    
+      if (!node.children) {
+        const x = isUPGMA ? xScale(maxH) : xScale(node._accumX || 0);
+        elements.push({ type: "label", x: x + 8, y: midY, text: node.label, isLeaf: true });
+        return { elements, y: midY, x };
+      }
+    
+      const leafCount = getLeafCount(node);
+      let childY = yStart;
+      const childResults = [];
+    
+      for (const child of node.children) {
+        const cLeaves = getLeafCount(child);
+        const cYEnd = childY + (cLeaves / leafCount) * (yEnd - yStart);
+    
+        if (isUPGMA) {
+          // nothing to accumulate
+        } else {
+          child._accumX = (node._accumX || 0) + (child.branchLength || 0);
+        }
+    
+        const result = layoutTree(child, childY, cYEnd, xScale, maxH, isUPGMA);
+        childResults.push(result);
+        elements.push(...result.elements);
+        childY = cYEnd;
+      }
+    
+      const nodeX = isUPGMA ? xScale(node.height) : xScale(node._accumX || 0);
+    
+      // vertical line connecting children
+      const minChildY = Math.min(...childResults.map(r => r.y));
+      const maxChildY = Math.max(...childResults.map(r => r.y));
+      elements.push({ type: "vline", x: nodeX, y1: minChildY, y2: maxChildY });
+    
+      // horizontal lines from node to each child
+      for (const cr of childResults) {
+        elements.push({ type: "hline", x1: nodeX, x2: cr.x, y: cr.y });
+      }
+    
+      // node marker
+      elements.push({ type: "node", x: nodeX, y: midY });
+    
+      return { elements, y: midY, x: nodeX };
+    }
+    
+    function TreeVisualization({ tree, algo }) {
+      const isUPGMA = algo === "upgma";
+      const leafCount = getLeafCount(tree);
+      const svgWidth = 580;
+      const svgHeight = Math.max(260, leafCount * 52);
+      const marginLeft = 40;
+      const marginRight = 120;
+      const marginTop = 20;
+      const marginBottom = 20;
+    
+      const plotW = svgWidth - marginLeft - marginRight;
+      const plotH = svgHeight - marginTop - marginBottom;
+    
+      let maxVal;
+      if (isUPGMA) {
+        maxVal = tree.height || 1;
+      } else {
+        function getMaxAccum(node, accum = 0) {
+          if (!node.children) return accum;
+          return Math.max(...node.children.map(c => getMaxAccum(c, accum + (c.branchLength || 0))));
+        }
+        maxVal = getMaxAccum(tree) || 1;
+      }
+    
+      const xScale = (val) => {
+        if (isUPGMA) return marginLeft + (1 - val / maxVal) * plotW;
+        return marginLeft + (val / maxVal) * plotW;
+      };
+    
+      tree._accumX = 0;
+      const { elements } = layoutTree(tree, marginTop, marginTop + plotH, xScale, maxVal, isUPGMA);
+    
+      return (
+        <svg width={svgWidth} height={svgHeight} style={{ display: "block", margin: "0 auto" }}>
+          <rect width={svgWidth} height={svgHeight} fill="#FAFBFC" rx={8} />
+    
+          {/* Scale bar */}
+          {(() => {
+            const barLen = maxVal > 10 ? Math.round(maxVal / 5) : maxVal > 1 ? Math.round(maxVal / 4 * 10) / 10 : Math.round(maxVal / 4 * 100) / 100;
+            const barPx = Math.abs(xScale(barLen) - xScale(0));
+            const barY = svgHeight - 12;
+            return (
+              <g>
+                <line x1={marginLeft} y1={barY} x2={marginLeft + barPx} y2={barY} stroke="#94A3B8" strokeWidth={2} />
+                <line x1={marginLeft} y1={barY - 3} x2={marginLeft} y2={barY + 3} stroke="#94A3B8" strokeWidth={2} />
+                <line x1={marginLeft + barPx} y1={barY - 3} x2={marginLeft + barPx} y2={barY + 3} stroke="#94A3B8" strokeWidth={2} />
+                <text x={marginLeft + barPx / 2} y={barY - 5} textAnchor="middle" fontSize={10} fill="#64748B">{barLen}</text>
+              </g>
+            );
+          })()}
+    
+          {elements.map((el, i) => {
+            if (el.type === "hline") {
+              return <line key={i} x1={el.x1} y1={el.y} x2={el.x2} y2={el.y} stroke="#475569" strokeWidth={2} />;
+            }
+            if (el.type === "vline") {
+              return <line key={i} x1={el.x} y1={el.y1} x2={el.x} y2={el.y2} stroke="#475569" strokeWidth={2} />;
+            }
+            if (el.type === "node") {
+              return <circle key={i} cx={el.x} cy={el.y} r={3} fill="#6366F1" />;
+            }
+            if (el.type === "label") {
+              return (
+                <text key={i} x={el.x} y={el.y + 4} fontSize={13} fontWeight={700} fill="#059669" fontFamily="monospace">
+                  {el.text}
+                </text>
+              );
+            }
+            return null;
+          })}
+        </svg>
+      );
+    }
+    
+    /* ─── Distance Matrix Table ─── */
+    function DistMatrix({ labels, matrix, highlight, caption }) {
+      return (
+        <div style={{ overflowX: "auto" }}>
+          {caption && <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBottom: 6 }}>{caption}</div>}
+          <table style={{ borderCollapse: "collapse", fontSize: 12, fontFamily: "monospace" }}>
+            <thead>
+              <tr>
+                <th style={{ padding: "4px 8px", color: "#94A3B8" }}></th>
+                {labels.map((l, j) => (
+                  <th key={j} style={{
+                    padding: "4px 8px", fontWeight: 700, color: "#4338CA", textAlign: "center",
+                    maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+                  }}>{l.length > 8 ? l.substring(0, 7) + "…" : l}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {matrix.map((row, i) => (
+                <tr key={i}>
+                  <td style={{ padding: "4px 8px", fontWeight: 700, color: "#059669", whiteSpace: "nowrap" }}>
+                    {labels[i].length > 8 ? labels[i].substring(0, 7) + "…" : labels[i]}
+                  </td>
+                  {row.map((val, j) => {
+                    const isHL = highlight && ((highlight[0] === i && highlight[1] === j) || (highlight[0] === j && highlight[1] === i));
+                    return (
+                      <td key={j} style={{
+                        padding: "4px 8px", textAlign: "center",
+                        background: i === j ? "#F1F5F9" : isHL ? "#FEF3C7" : "white",
+                        border: "1px solid #E2E8F0",
+                        fontWeight: isHL ? 800 : 400,
+                        color: i === j ? "#CBD5E1" : isHL ? "#B45309" : "#334155"
+                      }}>
+                        {i === j ? "—" : typeof val === "number" ? (Number.isInteger(val) ? val : val.toFixed(2)) : val}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+    
+    /* ─── Editable matrix input ─── */
+    function EditableMatrix({ labels, matrix, setLabels, setMatrix }) {
+      const n = labels.length;
+    
+      const addTaxon = () => {
+        const newLabel = `Taxon${n + 1}`;
+        const newLabels = [...labels, newLabel];
+        const newMatrix = matrix.map(row => [...row, 0]);
+        newMatrix.push(new Array(n + 1).fill(0));
+        setLabels(newLabels);
+        setMatrix(newMatrix);
+      };
+    
+      const removeTaxon = () => {
+        if (n <= 3) return;
+        setLabels(labels.slice(0, -1));
+        setMatrix(matrix.slice(0, -1).map(r => r.slice(0, -1)));
+      };
+    
+      return (
+        <div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr>
+                  <th style={{ padding: 4 }}></th>
+                  {labels.map((l, j) => (
+                    <th key={j} style={{ padding: 4 }}>
+                      <input
+                        value={l}
+                        onChange={e => {
+                          const nl = [...labels]; nl[j] = e.target.value; setLabels(nl);
+                        }}
+                        style={{
+                          width: 72, padding: "4px 6px", fontSize: 12, fontWeight: 700,
+                          border: "1px solid #E2E8F0", borderRadius: 4, textAlign: "center",
+                          color: "#4338CA", fontFamily: "monospace"
+                        }}
+                      />
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {matrix.map((row, i) => (
+                  <tr key={i}>
+                    <td style={{
+                      padding: 4, fontWeight: 700, color: "#059669", fontSize: 12,
+                      fontFamily: "monospace", whiteSpace: "nowrap"
+                    }}>{labels[i]}</td>
+                    {row.map((val, j) => (
+                      <td key={j} style={{ padding: 2 }}>
+                        {i === j ? (
+                          <div style={{
+                            width: 72, height: 28, background: "#F1F5F9", borderRadius: 4,
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            color: "#CBD5E1", fontSize: 12
+                          }}>0</div>
+                        ) : i > j ? (
+                          <input
+                            type="number"
+                            step="any"
+                            value={val}
+                            onChange={e => {
+                              const v = parseFloat(e.target.value) || 0;
+                              const nm = matrix.map(r => [...r]);
+                              nm[i][j] = v; nm[j][i] = v;
+                              setMatrix(nm);
+                            }}
+                            style={{
+                              width: 72, padding: "4px 6px", fontSize: 12, textAlign: "center",
+                              border: "1px solid #E2E8F0", borderRadius: 4, fontFamily: "monospace",
+                              color: "#1E293B"
+                            }}
+                          />
+                        ) : (
+                          <div style={{
+                            width: 72, height: 28, background: "#FAFBFC", borderRadius: 4,
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            color: "#94A3B8", fontSize: 12, fontFamily: "monospace"
+                          }}>{typeof val === "number" ? (Number.isInteger(val) ? val : val.toFixed(2)) : val}</div>
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button onClick={addTaxon} disabled={n >= 8} style={{
+              padding: "5px 12px", fontSize: 11, fontWeight: 700, borderRadius: 6, cursor: n >= 8 ? "default" : "pointer",
+              border: "1px solid #E2E8F0", background: "white", color: n >= 8 ? "#CBD5E1" : "#059669"
+            }}>+ Add Taxon</button>
+            <button onClick={removeTaxon} disabled={n <= 3} style={{
+              padding: "5px 12px", fontSize: 11, fontWeight: 700, borderRadius: 6, cursor: n <= 3 ? "default" : "pointer",
+              border: "1px solid #E2E8F0", background: "white", color: n <= 3 ? "#CBD5E1" : "#DC2626"
+            }}>− Remove</button>
+          </div>
+        </div>
+      );
+    }
+    
+    /* ─── Newick format ─── */
+    function toNewick(node, isUPGMA) {
+      if (!node.children) {
+        if (isUPGMA) return node.label;
+        return node.label + (node.branchLength ? ":" + node.branchLength.toFixed(3) : "");
+      }
+      const inner = node.children.map(c => {
+        if (isUPGMA) {
+          const bl = node.height - (c.height || 0);
+          return toNewickUPGMA(c, node.height) ;
+        }
+        return toNewick(c, false);
+      }).join(",");
+      if (isUPGMA) return `(${node.children.map(c => toNewickUPGMA(c, node.height)).join(",")})`;
+      return `(${inner})`;
+    }
+    
+    function toNewickUPGMA(node, parentHeight) {
+      const bl = parentHeight - (node.height || 0);
+      if (!node.children) return `${node.label}:${bl.toFixed(3)}`;
+      const inner = node.children.map(c => toNewickUPGMA(c, node.height)).join(",");
+      return `(${inner}):${bl.toFixed(3)}`;
+    }
+    
+    /* ─── Main component ─── */
+    const App = function PhyloInterpreter() {
+      const defPreset = "Globins (5 species)";
+      const def = PRESETS[defPreset];
+      const [preset, setPreset] = useState(defPreset);
+      const [labels, setLabels] = useState(def.labels);
+      const [matrix, setMatrix] = useState(def.matrix);
+      const [algo, setAlgo] = useState("upgma");
+      const [currentStep, setCurrentStep] = useState(-1);
+      const [showTree, setShowTree] = useState(false);
+      const [editMode, setEditMode] = useState(false);
+    
+      const result = useMemo(() => {
+        try {
+          if (labels.length < 3) return null;
+          return algo === "upgma" ? runUPGMA(labels, matrix) : runNJ(labels, matrix);
+        } catch { return null; }
+      }, [labels, matrix, algo]);
+    
+      const applyPreset = useCallback((name) => {
+        setPreset(name);
+        if (PRESETS[name]) {
+          setLabels([...PRESETS[name].labels]);
+          setMatrix(PRESETS[name].matrix.map(r => [...r]));
+        }
+        setCurrentStep(-1);
+        setShowTree(false);
+        setEditMode(name === "Custom");
+      }, []);
+    
+      const totalSteps = result ? result.steps.length : 0;
+    
+      const stepForward = () => {
+        if (currentStep < totalSteps - 1) setCurrentStep(prev => prev + 1);
+        else setShowTree(true);
+      };
+      const stepBack = () => {
+        if (showTree) { setShowTree(false); return; }
+        if (currentStep >= 0) setCurrentStep(prev => prev - 1);
+      };
+      const showAll = () => { setCurrentStep(totalSteps - 1); setShowTree(true); };
+      const resetSteps = () => { setCurrentStep(-1); setShowTree(false); };
+    
+      const step = currentStep >= 0 && result ? result.steps[currentStep] : null;
+    
+      return (
+        <div style={{
+          fontFamily: "'Inter', -apple-system, sans-serif",
+          maxWidth: 940, margin: "0 auto", padding: 20,
+          background: "linear-gradient(135deg, #FFFBEB 0%, #F0FDF4 100%)",
+          minHeight: "100vh"
+        }}>
+          {/* Header */}
+          <div style={{ textAlign: "center", marginBottom: 20 }}>
+            <h1 style={{ fontSize: 24, fontWeight: 800, color: "#0F172A", margin: 0 }}>
+              🌳 Phylogenetic Tree Interpreter
+            </h1>
+            <p style={{ fontSize: 13, color: "#64748B", margin: "6px 0 0" }}>
+              Build trees step-by-step from distance matrices — BSB511 / BENG451
+            </p>
+          </div>
+    
+          {/* Settings */}
+          <div style={{
+            background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+          }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
+              {/* Presets */}
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 6 }}>DATASET</label>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                  {Object.keys(PRESETS).map(name => (
+                    <button key={name} onClick={() => applyPreset(name)} style={{
+                      padding: "6px 10px", fontSize: 11, borderRadius: 6, cursor: "pointer",
+                      border: preset === name ? "2px solid #B45309" : "1px solid #E2E8F0",
+                      background: preset === name ? "#FFFBEB" : "white",
+                      color: preset === name ? "#B45309" : "#64748B", fontWeight: 600
+                    }}>{name}</button>
+                  ))}
+                </div>
+              </div>
+    
+              {/* Algorithm */}
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 6 }}>ALGORITHM</label>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {[["upgma", "UPGMA"], ["nj", "Neighbor-Joining"]].map(([id, label]) => (
+                    <button key={id} onClick={() => { setAlgo(id); resetSteps(); }} style={{
+                      padding: "6px 14px", fontSize: 11, borderRadius: 6, cursor: "pointer",
+                      border: algo === id ? "2px solid #059669" : "1px solid #E2E8F0",
+                      background: algo === id ? "#ECFDF5" : "white",
+                      color: algo === id ? "#047857" : "#64748B", fontWeight: 600
+                    }}>{label}</button>
+                  ))}
+                </div>
+              </div>
+    
+              {/* Edit toggle */}
+              <div style={{ marginLeft: "auto" }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 6 }}>MATRIX</label>
+                <button onClick={() => { setEditMode(!editMode); resetSteps(); }} style={{
+                  padding: "6px 14px", fontSize: 11, borderRadius: 6, cursor: "pointer",
+                  border: editMode ? "2px solid #6366F1" : "1px solid #E2E8F0",
+                  background: editMode ? "#EEF2FF" : "white",
+                  color: editMode ? "#4338CA" : "#64748B", fontWeight: 600
+                }}>{editMode ? "Done Editing" : "✎ Edit Matrix"}</button>
+              </div>
+            </div>
+    
+            {PRESETS[preset]?.description && !editMode && (
+              <div style={{ marginTop: 10, fontSize: 12, color: "#64748B", fontStyle: "italic" }}>
+                {PRESETS[preset].description}
+              </div>
+            )}
+    
+            {/* Editable matrix */}
+            {editMode && (
+              <div style={{ marginTop: 16 }}>
+                <EditableMatrix labels={labels} matrix={matrix} setLabels={setLabels} setMatrix={setMatrix} />
+              </div>
+            )}
+          </div>
+    
+          {/* Initial distance matrix */}
+          {!editMode && (
+            <div style={{
+              background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
+              boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+            }}>
+              <DistMatrix labels={labels} matrix={matrix} caption="Input Distance Matrix" />
+            </div>
+          )}
+    
+          {/* Step controls */}
+          {result && (
+            <div style={{
+              display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16, alignItems: "center"
+            }}>
+              <button onClick={stepBack} disabled={currentStep < 0 && !showTree} style={{
+                padding: "8px 14px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                border: "1px solid #E2E8F0", background: "white", cursor: currentStep < 0 && !showTree ? "default" : "pointer",
+                color: currentStep < 0 && !showTree ? "#CBD5E1" : "#64748B",
+                opacity: currentStep < 0 && !showTree ? 0.5 : 1
+              }}>◀ Back</button>
+    
+              <button onClick={stepForward} disabled={showTree} style={{
+                padding: "8px 14px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                border: "none", background: showTree ? "#CBD5E1" : "#F97316", color: "white",
+                cursor: showTree ? "default" : "pointer"
+              }}>Next Step ▶</button>
+    
+              <button onClick={showAll} style={{
+                padding: "8px 14px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                border: "2px solid #E2E8F0", background: "white", color: "#64748B", cursor: "pointer"
+              }}>Show Final Tree</button>
+    
+              <button onClick={resetSteps} style={{
+                padding: "8px 14px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                border: "2px solid #FCA5A5", background: "white", color: "#DC2626", cursor: "pointer"
+              }}>↺ Reset</button>
+    
+              <div style={{
+                marginLeft: "auto", fontSize: 12, color: "#64748B",
+                background: "#F8FAFC", padding: "6px 12px", borderRadius: 8, fontWeight: 600
+              }}>
+                Step {Math.max(0, currentStep + 1)} / {totalSteps}
+                {showTree && " + Tree"}
+              </div>
+            </div>
+          )}
+    
+          {/* Step detail */}
+          {step && (
+            <div style={{
+              background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
+              boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+            }}>
+              <div style={{
+                display: "flex", alignItems: "center", gap: 10, marginBottom: 14
+              }}>
+                <span style={{
+                  fontSize: 12, fontWeight: 700, color: "white",
+                  background: algo === "upgma" ? "#059669" : "#6366F1",
+                  padding: "4px 10px", borderRadius: 6
+                }}>
+                  STEP {currentStep + 1}
+                </span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#1E293B" }}>
+                  Merge: <span style={{ color: "#059669", fontFamily: "monospace" }}>{step.merged[0]}</span>
+                  {" "}&amp;{" "}
+                  <span style={{ color: "#7C3AED", fontFamily: "monospace" }}>{step.merged[1]}</span>
+                </span>
+              </div>
+    
+              {algo === "upgma" && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{
+                    background: "#F0FDF4", borderRadius: 8, padding: 12,
+                    fontSize: 13, color: "#065F46", fontFamily: "monospace", lineHeight: 1.8
+                  }}>
+                    <div>Minimum distance = <strong>{step.distance.toFixed(2)}</strong></div>
+                    <div>Cluster height = {step.distance.toFixed(2)} / 2 = <strong>{step.height.toFixed(2)}</strong></div>
+                    <div>New cluster: <strong>{step.newLabel}</strong></div>
+                  </div>
+                </div>
+              )}
+    
+              {algo === "nj" && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{
+                    background: "#EEF2FF", borderRadius: 8, padding: 12,
+                    fontSize: 13, color: "#312E81", fontFamily: "monospace", lineHeight: 1.8
+                  }}>
+                    <div>Minimum Q value = <strong>{step.minQ.toFixed(2)}</strong></div>
+                    <div>
+                      Branch to {step.merged[0]}: <strong>{step.branchLengths[0].toFixed(3)}</strong>
+                      {" | "}
+                      Branch to {step.merged[1]}: <strong>{step.branchLengths[1].toFixed(3)}</strong>
+                    </div>
+                  </div>
+    
+                  {/* Q-matrix */}
+                  {step.qMatrix && (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBottom: 6 }}>Q-Matrix (used to find pair to merge)</div>
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace" }}>
+                          <thead>
+                            <tr>
+                              <th style={{ padding: "3px 6px" }}></th>
+                              {step.clusterLabels.map((l, j) => (
+                                <th key={j} style={{ padding: "3px 6px", color: "#6366F1", fontWeight: 700, textAlign: "center" }}>
+                                  {l.length > 7 ? l.substring(0, 6) + "…" : l}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {step.qMatrix.map((row, i) => (
+                              <tr key={i}>
+                                <td style={{ padding: "3px 6px", fontWeight: 700, color: "#059669" }}>
+                                  {step.clusterLabels[i].length > 7 ? step.clusterLabels[i].substring(0, 6) + "…" : step.clusterLabels[i]}
+                                </td>
+                                {row.map((val, j) => {
+                                  const isMin = i < j && Math.abs(val - step.minQ) < 0.001;
+                                  return (
+                                    <td key={j} style={{
+                                      padding: "3px 6px", textAlign: "center",
+                                      border: "1px solid #E2E8F0",
+                                      background: i === j ? "#F1F5F9" : isMin ? "#FEF3C7" : "white",
+                                      fontWeight: isMin ? 800 : 400,
+                                      color: i >= j ? "#CBD5E1" : isMin ? "#B45309" : "#334155"
+                                    }}>
+                                      {i >= j ? "—" : val.toFixed(1)}
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+    
+              {/* Distance matrix at this step */}
+              <div>
+                <DistMatrix
+                  labels={step.clusterLabels}
+                  matrix={step.distSnapshot}
+                  highlight={[
+                    step.clusterLabels.indexOf(step.merged[0]),
+                    step.clusterLabels.indexOf(step.merged[1])
+                  ]}
+                  caption="Distance matrix at this step (highlighted pair will be merged)"
+                />
+              </div>
+            </div>
+          )}
+    
+          {/* Tree visualization */}
+          {showTree && result && (
+            <div style={{
+              background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
+              boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+            }}>
+              <h3 style={{ fontSize: 15, fontWeight: 700, color: "#1E293B", marginTop: 0, marginBottom: 4 }}>
+                {algo === "upgma" ? "UPGMA" : "Neighbor-Joining"} Phylogenetic Tree
+              </h3>
+              <p style={{ fontSize: 12, color: "#64748B", marginTop: 0, marginBottom: 16 }}>
+                {algo === "upgma"
+                  ? "Rooted tree — assumes a constant molecular clock. Branch lengths represent evolutionary distance from leaves to internal nodes."
+                  : "Unrooted tree — does not assume a molecular clock. Branch lengths represent estimated evolutionary change."}
+              </p>
+              <TreeVisualization tree={result.tree} algo={algo} />
+    
+              {/* Newick */}
+              <div style={{ marginTop: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBottom: 4 }}>NEWICK FORMAT</div>
+                <div style={{
+                  background: "#F8FAFC", borderRadius: 8, padding: 12,
+                  fontFamily: "monospace", fontSize: 12, color: "#334155",
+                  wordBreak: "break-all", lineHeight: 1.6, userSelect: "all"
+                }}>
+                  {algo === "upgma"
+                    ? toNewickUPGMA(result.tree, result.tree.height) + ";"
+                    : toNewick(result.tree, false) + ";"}
+                </div>
+                <p style={{ fontSize: 11, color: "#94A3B8", marginTop: 6 }}>
+                  Copy this into any tree viewer (e.g., iTOL, FigTree, ETE Toolkit) for publication-quality rendering.
+                </p>
+              </div>
+            </div>
+          )}
+    
+          {/* Concepts panel */}
+          <div style={{
+            background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+          }}>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1E293B", marginTop: 0, marginBottom: 10 }}>
+              Key Concepts
+            </h3>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 13, color: "#475569", lineHeight: 1.7 }}>
+              <div>
+                <div style={{ fontWeight: 700, color: "#059669", marginBottom: 4 }}>UPGMA</div>
+                <p style={{ margin: 0 }}>
+                  <strong>U</strong>nweighted <strong>P</strong>air <strong>G</strong>roup <strong>M</strong>ethod with <strong>A</strong>rithmetic mean.
+                  Produces a rooted, ultrametric tree. Assumes a constant molecular clock — all lineages evolve at the same rate.
+                  At each step, the two closest clusters are merged and their distance becomes the node height.
+                </p>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, color: "#6366F1", marginBottom: 4 }}>Neighbor-Joining</div>
+                <p style={{ margin: 0 }}>
+                  Produces an unrooted, additive tree. Does <em>not</em> assume a molecular clock — different lineages can evolve at different rates.
+                  Uses a Q-matrix correction that accounts for divergence from all other taxa, not just pairwise distance. Generally preferred for real-world molecular data.
+                </p>
+              </div>
+            </div>
+    
+            <div style={{ marginTop: 14, padding: "10px 14px", background: "#FFFBEB", borderRadius: 8, fontSize: 12, color: "#92400E", lineHeight: 1.6 }}>
+              💡 <strong>When to use which?</strong> UPGMA is simpler and useful as a teaching tool, but the molecular clock assumption is often violated in real data.
+              Neighbor-Joining is the standard for building quick, reliable trees from distance matrices in research. For maximum-likelihood or Bayesian trees, you'd use tools like RAxML, IQ-TREE, or MrBayes.
+            </div>
+          </div>
+    
+          <div style={{ textAlign: "center", marginTop: 16, fontSize: 11, color: "#94A3B8" }}>
+            BSB511 / BENG451 — Bioinformatics Fundamentals — Phylogenetic Tree Interpreter
+          </div>
+        </div>
+      );
+    }
+    
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
