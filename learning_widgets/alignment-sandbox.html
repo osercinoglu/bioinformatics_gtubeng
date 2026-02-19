@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pairwise Alignment Sandbox — BSB511 / BENG451</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; }
+    .back-link {
+      position: fixed; top: 12px; left: 12px; z-index: 1000;
+      padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 700;
+      background: rgba(15,23,42,0.85); color: #94A3B8; text-decoration: none;
+      border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(8px);
+      font-family: 'Inter', sans-serif; transition: all 0.2s;
+    }
+    .back-link:hover { color: #E2E8F0; border-color: rgba(255,255,255,0.3); }
+  </style>
+</head>
+<body>
+  <a href="index.html" class="back-link">← All Widgets</a>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useMemo, useCallback, useRef, useEffect } = React;
+
+    
+    const PRESETS = {
+      "Simple (short)": { seq1: "GCATGCU", seq2: "GATTACA", match: 1, mismatch: -1, gap: -1 },
+      "Globin fragments": { seq1: "MVLSPADKT", seq2: "MVHLTPEEK", match: 2, mismatch: -1, gap: -2 },
+      "DNA motif": { seq1: "AGTACGCA", seq2: "TATGC", match: 1, mismatch: -1, gap: -2 },
+      "Custom": null
+    };
+    
+    function computeNW(seq1, seq2, match, mismatch, gap) {
+      const m = seq1.length;
+      const n = seq2.length;
+      const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+      const tb = Array.from({ length: m + 1 }, () => Array(n + 1).fill(""));
+    
+      for (let i = 0; i <= m; i++) { dp[i][0] = i * gap; tb[i][0] = "up"; }
+      for (let j = 0; j <= n; j++) { dp[0][j] = j * gap; tb[0][j] = "left"; }
+      tb[0][0] = "done";
+    
+      for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+          const s = seq1[i - 1] === seq2[j - 1] ? match : mismatch;
+          const diag = dp[i - 1][j - 1] + s;
+          const up = dp[i - 1][j] + gap;
+          const left = dp[i][j - 1] + gap;
+          const best = Math.max(diag, up, left);
+          dp[i][j] = best;
+          if (best === diag) tb[i][j] = "diag";
+          else if (best === up) tb[i][j] = "up";
+          else tb[i][j] = "left";
+        }
+      }
+    
+      const path = [];
+      let i = m, j = n;
+      while (i > 0 || j > 0) {
+        path.push([i, j]);
+        if (tb[i][j] === "diag") { i--; j--; }
+        else if (tb[i][j] === "up") { i--; }
+        else { j--; }
+      }
+      path.push([0, 0]);
+      path.reverse();
+    
+      let align1 = "", alignM = "", align2 = "";
+      for (let k = 1; k < path.length; k++) {
+        const [pi, pj] = path[k - 1];
+        const [ci, cj] = path[k];
+        if (ci > pi && cj > pj) {
+          align1 += seq1[ci - 1];
+          align2 += seq2[cj - 1];
+          alignM += seq1[ci - 1] === seq2[cj - 1] ? "|" : ".";
+        } else if (ci > pi) {
+          align1 += seq1[ci - 1];
+          align2 += "-";
+          alignM += " ";
+        } else {
+          align1 += "-";
+          align2 += seq2[cj - 1];
+          alignM += " ";
+        }
+      }
+    
+      return { dp, tb, path, align1, alignM, align2 };
+    }
+    
+    function computeSW(seq1, seq2, match, mismatch, gap) {
+      const m = seq1.length;
+      const n = seq2.length;
+      const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+      const tb = Array.from({ length: m + 1 }, () => Array(n + 1).fill("done"));
+    
+      let maxVal = 0, maxI = 0, maxJ = 0;
+    
+      for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+          const s = seq1[i - 1] === seq2[j - 1] ? match : mismatch;
+          const diag = dp[i - 1][j - 1] + s;
+          const up = dp[i - 1][j] + gap;
+          const left = dp[i][j - 1] + gap;
+          const best = Math.max(0, diag, up, left);
+          dp[i][j] = best;
+          if (best === 0) tb[i][j] = "done";
+          else if (best === diag) tb[i][j] = "diag";
+          else if (best === up) tb[i][j] = "up";
+          else tb[i][j] = "left";
+          if (best > maxVal) { maxVal = best; maxI = i; maxJ = j; }
+        }
+      }
+    
+      const path = [];
+      let i = maxI, j = maxJ;
+      while (i > 0 && j > 0 && dp[i][j] > 0) {
+        path.push([i, j]);
+        if (tb[i][j] === "diag") { i--; j--; }
+        else if (tb[i][j] === "up") { i--; }
+        else if (tb[i][j] === "left") { j--; }
+        else break;
+      }
+      path.push([i, j]);
+      path.reverse();
+    
+      let align1 = "", alignM = "", align2 = "";
+      for (let k = 1; k < path.length; k++) {
+        const [pi, pj] = path[k - 1];
+        const [ci, cj] = path[k];
+        if (ci > pi && cj > pj) {
+          align1 += seq1[ci - 1];
+          align2 += seq2[cj - 1];
+          alignM += seq1[ci - 1] === seq2[cj - 1] ? "|" : ".";
+        } else if (ci > pi) {
+          align1 += seq1[ci - 1];
+          align2 += "-";
+          alignM += " ";
+        } else {
+          align1 += "-";
+          align2 += seq2[cj - 1];
+          alignM += " ";
+        }
+      }
+    
+      return { dp, tb, path, align1, alignM, align2 };
+    }
+    
+    function Arrow({ dir }) {
+      const arrows = { diag: "↖", up: "↑", left: "←", done: "" };
+      const colors = { diag: "#8B5CF6", up: "#3B82F6", left: "#F59E0B", done: "#CBD5E1" };
+      return (
+        <span style={{ fontSize: 10, color: colors[dir] || "#CBD5E1", fontWeight: 700 }}>
+          {arrows[dir] || ""}
+        </span>
+      );
+    }
+    
+    const App = function AlignmentSandbox() {
+      const [preset, setPreset] = useState("Simple (short)");
+      const [seq1, setSeq1] = useState("GCATGCU");
+      const [seq2, setSeq2] = useState("GATTACA");
+      const [match, setMatch] = useState(1);
+      const [mismatch, setMismatch] = useState(-1);
+      const [gapPenalty, setGapPenalty] = useState(-1);
+      const [algo, setAlgo] = useState("nw");
+    
+      const [userGrid, setUserGrid] = useState({});
+      const [showSolution, setShowSolution] = useState(false);
+      const [showArrows, setShowArrows] = useState(false);
+      const [showPath, setShowPath] = useState(false);
+      const [checkResult, setCheckResult] = useState(null);
+      const [activeHint, setActiveHint] = useState(null);
+      const [revealedCells, setRevealedCells] = useState({});
+      const [stepMode, setStepMode] = useState(false);
+      const [stepIndex, setStepIndex] = useState(0);
+    
+      const inputRefs = useRef({});
+    
+      const solution = useMemo(() => {
+        if (seq1.length === 0 || seq2.length === 0) return null;
+        if (seq1.length > 15 || seq2.length > 15) return null;
+        return algo === "nw"
+          ? computeNW(seq1, seq2, match, mismatch, gapPenalty)
+          : computeSW(seq1, seq2, match, mismatch, gapPenalty);
+      }, [seq1, seq2, match, mismatch, gapPenalty, algo]);
+    
+      const pathSet = useMemo(() => {
+        if (!solution) return new Set();
+        return new Set(solution.path.map(([i, j]) => `${i},${j}`));
+      }, [solution]);
+    
+      const fillOrder = useMemo(() => {
+        if (!solution) return [];
+        const order = [];
+        const m = seq1.length, n = seq2.length;
+        if (algo === "nw") {
+          for (let i = 0; i <= m; i++) order.push([i, 0]);
+          for (let j = 1; j <= n; j++) order.push([0, j]);
+        }
+        for (let i = 1; i <= m; i++) {
+          for (let j = 1; j <= n; j++) {
+            order.push([i, j]);
+          }
+        }
+        return order;
+      }, [solution, seq1, seq2, algo]);
+    
+      const handleCellChange = useCallback((i, j, val) => {
+        const key = `${i},${j}`;
+        setUserGrid(prev => ({ ...prev, [key]: val }));
+        setCheckResult(null);
+      }, []);
+    
+      const handleCellKeyDown = useCallback((i, j, e) => {
+        const m = seq1.length, n = seq2.length;
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          let ni = i, nj = j + 1;
+          if (nj > n) { nj = (algo === "nw" ? 0 : 1); ni = i + 1; }
+          if (ni <= m) {
+            const ref = inputRefs.current[`${ni},${nj}`];
+            if (ref) ref.focus();
+          }
+        } else if (e.key === "ArrowRight" && j < n) {
+          inputRefs.current[`${i},${j+1}`]?.focus();
+        } else if (e.key === "ArrowLeft" && j > 0) {
+          inputRefs.current[`${i},${j-1}`]?.focus();
+        } else if (e.key === "ArrowDown" && i < m) {
+          inputRefs.current[`${i+1},${j}`]?.focus();
+        } else if (e.key === "ArrowUp" && i > 0) {
+          inputRefs.current[`${i-1},${j}`]?.focus();
+        }
+      }, [seq1, seq2, algo]);
+    
+      const checkAnswers = useCallback(() => {
+        if (!solution) return;
+        let correct = 0, wrong = 0, empty = 0;
+        const m = seq1.length, n = seq2.length;
+        const wrongCells = {};
+        for (let i = 0; i <= m; i++) {
+          for (let j = 0; j <= n; j++) {
+            if (algo === "nw" || (i > 0 && j > 0)) {
+              const key = `${i},${j}`;
+              const userVal = userGrid[key];
+              if (userVal === undefined || userVal === "") {
+                empty++;
+              } else if (parseInt(userVal) === solution.dp[i][j]) {
+                correct++;
+              } else {
+                wrong++;
+                wrongCells[key] = true;
+              }
+            }
+          }
+        }
+        setCheckResult({ correct, wrong, empty, wrongCells });
+      }, [solution, userGrid, seq1, seq2, algo]);
+    
+      const resetGrid = useCallback(() => {
+        setUserGrid({});
+        setCheckResult(null);
+        setShowSolution(false);
+        setShowArrows(false);
+        setShowPath(false);
+        setRevealedCells({});
+        setActiveHint(null);
+        setStepMode(false);
+        setStepIndex(0);
+      }, []);
+    
+      const applyPreset = useCallback((name) => {
+        setPreset(name);
+        if (PRESETS[name]) {
+          setSeq1(PRESETS[name].seq1);
+          setSeq2(PRESETS[name].seq2);
+          setMatch(PRESETS[name].match);
+          setMismatch(PRESETS[name].mismatch);
+          setGapPenalty(PRESETS[name].gap);
+        }
+        resetGrid();
+      }, [resetGrid]);
+    
+      const getHint = useCallback((i, j) => {
+        if (!solution) return;
+        const s = seq1[i - 1] === seq2[j - 1] ? match : mismatch;
+        const diagVal = (i > 0 && j > 0) ? solution.dp[i - 1][j - 1] : null;
+        const upVal = i > 0 ? solution.dp[i - 1][j] : null;
+        const leftVal = j > 0 ? solution.dp[i][j - 1] : null;
+    
+        let hint = `Cell (${i}, ${j}): `;
+        if (i === 0 && j === 0) {
+          hint += "Origin cell = 0";
+        } else if (algo === "nw" && i === 0) {
+          hint += `First row: ${j} × gap(${gapPenalty}) = ${j * gapPenalty}`;
+        } else if (algo === "nw" && j === 0) {
+          hint += `First column: ${i} × gap(${gapPenalty}) = ${i * gapPenalty}`;
+        } else {
+          const parts = [];
+          if (diagVal !== null) parts.push(`↖ diag: ${diagVal} + ${s} (${seq1[i-1]}=${seq2[j-1]}? ${seq1[i-1]===seq2[j-1] ? "match" : "mismatch"}) = ${diagVal + s}`);
+          if (upVal !== null) parts.push(`↑ up: ${upVal} + ${gapPenalty} (gap) = ${upVal + gapPenalty}`);
+          if (leftVal !== null) parts.push(`← left: ${leftVal} + ${gapPenalty} (gap) = ${leftVal + gapPenalty}`);
+          hint += parts.join(" | ");
+          if (algo === "sw") hint += " | 0 (floor)";
+          hint += ` → max = ${solution.dp[i][j]}`;
+        }
+        setActiveHint(hint);
+      }, [solution, seq1, seq2, match, mismatch, gapPenalty, algo]);
+    
+      const revealCell = useCallback((i, j) => {
+        if (!solution) return;
+        const key = `${i},${j}`;
+        setRevealedCells(prev => ({ ...prev, [key]: true }));
+        setUserGrid(prev => ({ ...prev, [key]: String(solution.dp[i][j]) }));
+      }, [solution]);
+    
+      const stepForward = useCallback(() => {
+        if (stepIndex < fillOrder.length) {
+          const [i, j] = fillOrder[stepIndex];
+          revealCell(i, j);
+          getHint(i, j);
+          setStepIndex(prev => prev + 1);
+        }
+      }, [stepIndex, fillOrder, revealCell, getHint]);
+    
+      const stepBack = useCallback(() => {
+        if (stepIndex > 0) {
+          const newIdx = stepIndex - 1;
+          const [i, j] = fillOrder[newIdx];
+          const key = `${i},${j}`;
+          setRevealedCells(prev => { const n = {...prev}; delete n[key]; return n; });
+          setUserGrid(prev => { const n = {...prev}; delete n[key]; return n; });
+          setStepIndex(newIdx);
+          if (newIdx > 0) {
+            const [pi, pj] = fillOrder[newIdx - 1];
+            getHint(pi, pj);
+          } else {
+            setActiveHint(null);
+          }
+        }
+      }, [stepIndex, fillOrder, getHint]);
+    
+      const m = seq1.length;
+      const n = seq2.length;
+      const tooLarge = m > 15 || n > 15;
+    
+      const cellSize = m > 10 || n > 10 ? 42 : 50;
+    
+      return (
+        <div style={{
+          fontFamily: "'Inter', -apple-system, sans-serif",
+          maxWidth: 960, margin: "0 auto", padding: 20,
+          background: "linear-gradient(135deg, #F0FDF4 0%, #EFF6FF 100%)",
+          minHeight: "100vh"
+        }}>
+          {/* Header */}
+          <div style={{ textAlign: "center", marginBottom: 20 }}>
+            <h1 style={{ fontSize: 24, fontWeight: 800, color: "#0F172A", margin: 0 }}>
+              🧮 Pairwise Alignment Sandbox
+            </h1>
+            <p style={{ fontSize: 13, color: "#64748B", margin: "6px 0 0" }}>
+              Practice Needleman-Wunsch & Smith-Waterman — BSB511 / BENG451
+            </p>
+          </div>
+    
+          {/* Settings Panel */}
+          <div style={{
+            background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+          }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-end" }}>
+              {/* Presets */}
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>PRESET</label>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {Object.keys(PRESETS).map(name => (
+                    <button key={name} onClick={() => applyPreset(name)} style={{
+                      padding: "6px 10px", fontSize: 11, borderRadius: 6, cursor: "pointer",
+                      border: preset === name ? "2px solid #4F46E5" : "1px solid #E2E8F0",
+                      background: preset === name ? "#EEF2FF" : "white",
+                      color: preset === name ? "#4338CA" : "#64748B", fontWeight: 600
+                    }}>{name}</button>
+                  ))}
+                </div>
+              </div>
+    
+              {/* Algorithm */}
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>ALGORITHM</label>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {[["nw", "Needleman-Wunsch (Global)"], ["sw", "Smith-Waterman (Local)"]].map(([id, label]) => (
+                    <button key={id} onClick={() => { setAlgo(id); resetGrid(); }} style={{
+                      padding: "6px 10px", fontSize: 11, borderRadius: 6, cursor: "pointer",
+                      border: algo === id ? "2px solid #059669" : "1px solid #E2E8F0",
+                      background: algo === id ? "#ECFDF5" : "white",
+                      color: algo === id ? "#047857" : "#64748B", fontWeight: 600
+                    }}>{label}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+    
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 14, alignItems: "flex-end" }}>
+              <div style={{ flex: "1 1 140px" }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>SEQUENCE 1</label>
+                <input value={seq1} onChange={e => { setSeq1(e.target.value.toUpperCase()); setPreset("Custom"); resetGrid(); }}
+                  style={{ width: "100%", padding: "8px 10px", fontFamily: "monospace", fontSize: 14, border: "2px solid #E2E8F0", borderRadius: 8, outline: "none", boxSizing: "border-box", fontWeight: 600, letterSpacing: 2, color: "#1E293B" }}
+                  spellCheck={false} />
+              </div>
+              <div style={{ flex: "1 1 140px" }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>SEQUENCE 2</label>
+                <input value={seq2} onChange={e => { setSeq2(e.target.value.toUpperCase()); setPreset("Custom"); resetGrid(); }}
+                  style={{ width: "100%", padding: "8px 10px", fontFamily: "monospace", fontSize: 14, border: "2px solid #E2E8F0", borderRadius: 8, outline: "none", boxSizing: "border-box", fontWeight: 600, letterSpacing: 2, color: "#1E293B" }}
+                  spellCheck={false} />
+              </div>
+              {[["Match", match, setMatch], ["Mismatch", mismatch, setMismatch], ["Gap", gapPenalty, setGapPenalty]].map(([label, val, setter]) => (
+                <div key={label} style={{ width: 72 }}>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>{label.toUpperCase()}</label>
+                  <input type="number" value={val} onChange={e => { setter(Number(e.target.value)); resetGrid(); }}
+                    style={{ width: "100%", padding: "8px 6px", fontSize: 14, border: "2px solid #E2E8F0", borderRadius: 8, outline: "none", textAlign: "center", fontWeight: 700, boxSizing: "border-box", color: "#1E293B" }} />
+                </div>
+              ))}
+            </div>
+          </div>
+    
+          {tooLarge && (
+            <div style={{ background: "#FEF3C7", borderRadius: 10, padding: 16, textAlign: "center", color: "#92400E", fontSize: 14, marginBottom: 16 }}>
+              Sequences are too long for interactive matrix (max 15 each). Shorten them to practice filling in cells.
+            </div>
+          )}
+    
+          {!tooLarge && solution && (
+            <>
+              {/* Controls */}
+              <div style={{
+                display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12, alignItems: "center"
+              }}>
+                <button onClick={checkAnswers} style={{
+                  padding: "8px 16px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                  border: "none", background: "#4F46E5", color: "white", cursor: "pointer"
+                }}>✓ Check Answers</button>
+                <button onClick={() => setShowSolution(!showSolution)} style={{
+                  padding: "8px 16px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                  border: "2px solid #E2E8F0", background: showSolution ? "#FEF2F2" : "white",
+                  color: showSolution ? "#DC2626" : "#64748B", cursor: "pointer"
+                }}>{showSolution ? "Hide Solution" : "Show Solution"}</button>
+                <button onClick={() => setShowArrows(!showArrows)} style={{
+                  padding: "8px 16px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                  border: "2px solid #E2E8F0", background: showArrows ? "#F5F3FF" : "white",
+                  color: showArrows ? "#7C3AED" : "#64748B", cursor: "pointer"
+                }}>{showArrows ? "Hide Arrows" : "Show Arrows"}</button>
+                <button onClick={() => setShowPath(!showPath)} style={{
+                  padding: "8px 16px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                  border: "2px solid #E2E8F0", background: showPath ? "#ECFDF5" : "white",
+                  color: showPath ? "#059669" : "#64748B", cursor: "pointer"
+                }}>{showPath ? "Hide Traceback" : "Show Traceback"}</button>
+    
+                <div style={{ borderLeft: "2px solid #E2E8F0", height: 24, margin: "0 4px" }} />
+    
+                <button onClick={() => { setStepMode(!stepMode); setStepIndex(0); setRevealedCells({}); setActiveHint(null); }} style={{
+                  padding: "8px 16px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                  border: "2px solid #E2E8F0", background: stepMode ? "#FFF7ED" : "white",
+                  color: stepMode ? "#C2410C" : "#64748B", cursor: "pointer"
+                }}>{stepMode ? "Exit Step Mode" : "▶ Step-by-Step"}</button>
+    
+                {stepMode && (
+                  <>
+                    <button onClick={stepBack} disabled={stepIndex === 0} style={{
+                      padding: "8px 12px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                      border: "1px solid #E2E8F0", background: "white", cursor: stepIndex === 0 ? "default" : "pointer",
+                      color: stepIndex === 0 ? "#CBD5E1" : "#64748B", opacity: stepIndex === 0 ? 0.5 : 1
+                    }}>◀ Back</button>
+                    <button onClick={stepForward} disabled={stepIndex >= fillOrder.length} style={{
+                      padding: "8px 12px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                      border: "none", background: stepIndex >= fillOrder.length ? "#CBD5E1" : "#F97316", cursor: stepIndex >= fillOrder.length ? "default" : "pointer",
+                      color: "white"
+                    }}>Next ▶</button>
+                    <span style={{ fontSize: 11, color: "#64748B" }}>
+                      {stepIndex}/{fillOrder.length}
+                    </span>
+                  </>
+                )}
+    
+                <div style={{ marginLeft: "auto" }}>
+                  <button onClick={resetGrid} style={{
+                    padding: "8px 16px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                    border: "2px solid #FCA5A5", background: "white", color: "#DC2626", cursor: "pointer"
+                  }}>↺ Reset</button>
+                </div>
+              </div>
+    
+              {/* Hint bar */}
+              {activeHint && (
+                <div style={{
+                  background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8,
+                  padding: "8px 14px", marginBottom: 12, fontSize: 12, color: "#92400E",
+                  fontFamily: "monospace", lineHeight: 1.6
+                }}>
+                  💡 {activeHint}
+                </div>
+              )}
+    
+              {/* Check result */}
+              {checkResult && (
+                <div style={{
+                  background: checkResult.wrong === 0 && checkResult.empty === 0 ? "#ECFDF5" : checkResult.wrong > 0 ? "#FEF2F2" : "#EFF6FF",
+                  border: `1px solid ${checkResult.wrong === 0 && checkResult.empty === 0 ? "#A7F3D0" : checkResult.wrong > 0 ? "#FECACA" : "#BFDBFE"}`,
+                  borderRadius: 8, padding: "8px 14px", marginBottom: 12, fontSize: 13
+                }}>
+                  {checkResult.wrong === 0 && checkResult.empty === 0 ? (
+                    <span style={{ color: "#059669", fontWeight: 700 }}>🎉 Perfect! All {checkResult.correct} cells are correct!</span>
+                  ) : (
+                    <span>
+                      <span style={{ color: "#059669", fontWeight: 600 }}>✓ {checkResult.correct} correct</span>
+                      {checkResult.wrong > 0 && <span style={{ color: "#DC2626", fontWeight: 600, marginLeft: 12 }}>✗ {checkResult.wrong} incorrect</span>}
+                      {checkResult.empty > 0 && <span style={{ color: "#3B82F6", marginLeft: 12 }}>○ {checkResult.empty} empty</span>}
+                    </span>
+                  )}
+                </div>
+              )}
+    
+              {/* DP Matrix */}
+              <div style={{
+                background: "white", borderRadius: 12, padding: 20,
+                boxShadow: "0 1px 3px rgba(0,0,0,0.08)", overflowX: "auto", marginBottom: 16
+              }}>
+                <table style={{ borderCollapse: "collapse", margin: "0 auto" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ width: cellSize, height: cellSize }}></th>
+                      <th style={{
+                        width: cellSize, height: cellSize, fontSize: 13, fontWeight: 700, color: "#94A3B8",
+                        textAlign: "center"
+                      }}>−</th>
+                      {seq2.split("").map((c, j) => (
+                        <th key={j} style={{
+                          width: cellSize, height: cellSize, fontSize: 15, fontWeight: 800,
+                          color: "#7C3AED", textAlign: "center", fontFamily: "monospace"
+                        }}>{c}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from({ length: m + 1 }).map((_, i) => (
+                      <tr key={i}>
+                        <td style={{
+                          fontSize: 15, fontWeight: 800, color: "#059669", textAlign: "center",
+                          fontFamily: "monospace", width: cellSize
+                        }}>
+                          {i === 0 ? "−" : seq1[i - 1]}
+                        </td>
+                        {Array.from({ length: n + 1 }).map((_, j) => {
+                          const key = `${i},${j}`;
+                          const isOnPath = showPath && pathSet.has(key);
+                          const isRevealed = revealedCells[key];
+                          const isWrong = checkResult?.wrongCells?.[key];
+                          const userVal = userGrid[key];
+                          const isInitCell = algo === "nw" && (i === 0 || j === 0);
+                          const isSWBody = algo === "sw" && i > 0 && j > 0;
+                          const isNWBody = algo === "nw";
+    
+                          let bg = "#FFFFFF";
+                          if (isOnPath) bg = "#D1FAE5";
+                          else if (isWrong) bg = "#FEE2E2";
+                          else if (isRevealed) bg = "#FFF7ED";
+                          else if (stepMode && stepIndex < fillOrder.length) {
+                            const [si, sj] = fillOrder[stepIndex];
+                            if (si === i && sj === j) bg = "#FEF3C7";
+                          }
+    
+                          return (
+                            <td key={j} style={{
+                              width: cellSize, height: cellSize, textAlign: "center", position: "relative",
+                              border: "1px solid #E2E8F0", background: bg, transition: "background 0.2s"
+                            }}>
+                              {showArrows && solution.tb[i][j] && i + j > 0 && (
+                                <div style={{ position: "absolute", top: 2, left: 4 }}>
+                                  <Arrow dir={solution.tb[i][j]} />
+                                </div>
+                              )}
+                              {showSolution ? (
+                                <span style={{
+                                  fontFamily: "monospace", fontSize: 14, fontWeight: 700,
+                                  color: isOnPath ? "#059669" : "#1E293B"
+                                }}>{solution.dp[i][j]}</span>
+                              ) : (isInitCell && algo === "nw" && !stepMode) ? (
+                                <span style={{
+                                  fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: "#94A3B8"
+                                }}>{solution.dp[i][j]}</span>
+                              ) : (
+                                <input
+                                  ref={el => { inputRefs.current[key] = el; }}
+                                  type="text"
+                                  value={userVal !== undefined ? userVal : ""}
+                                  onChange={e => handleCellChange(i, j, e.target.value)}
+                                  onFocus={() => { if (i > 0 && j > 0) getHint(i, j); }}
+                                  onBlur={() => setActiveHint(null)}
+                                  onKeyDown={e => handleCellKeyDown(i, j, e)}
+                                  style={{
+                                    width: cellSize - 10, height: cellSize - 10,
+                                    textAlign: "center", border: "none", outline: "none",
+                                    fontFamily: "monospace", fontSize: 14, fontWeight: 700,
+                                    background: "transparent",
+                                    color: isWrong ? "#DC2626" : isRevealed ? "#C2410C" : "#1E293B"
+                                  }}
+                                />
+                              )}
+                              {!showSolution && i > 0 && j > 0 && (
+                                <button
+                                  onClick={() => revealCell(i, j)}
+                                  title="Reveal this cell"
+                                  style={{
+                                    position: "absolute", bottom: 1, right: 1, fontSize: 8,
+                                    background: "none", border: "none", cursor: "pointer",
+                                    color: "#CBD5E1", lineHeight: 1, padding: 0
+                                  }}
+                                >👁</button>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+    
+              {/* Alignment Result */}
+              {(showSolution || showPath) && (
+                <div style={{
+                  background: "white", borderRadius: 12, padding: 20,
+                  boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+                }}>
+                  <h3 style={{ fontSize: 15, fontWeight: 700, color: "#1E293B", marginTop: 0, marginBottom: 12 }}>
+                    Optimal {algo === "nw" ? "Global" : "Local"} Alignment (Score: {algo === "nw" ? solution.dp[m][n] : Math.max(...solution.dp.flat())})
+                  </h3>
+                  <div style={{
+                    fontFamily: "monospace", fontSize: 15, lineHeight: 2,
+                    background: "#F8FAFC", borderRadius: 8, padding: 16, letterSpacing: 2
+                  }}>
+                    <div style={{ color: "#059669", fontWeight: 700 }}>
+                      Seq1: {solution.align1.split("").map((c, i) => (
+                        <span key={i} style={{
+                          color: c === "-" ? "#CBD5E1" : solution.alignM[i] === "|" ? "#059669" : "#F59E0B",
+                          fontWeight: 700
+                        }}>{c}</span>
+                      ))}
+                    </div>
+                    <div style={{ color: "#94A3B8" }}>
+                      {"      "}{solution.alignM.split("").map((c, i) => (
+                        <span key={i} style={{ color: c === "|" ? "#059669" : c === "." ? "#F59E0B" : "transparent" }}>{c === " " ? " " : c}</span>
+                      ))}
+                    </div>
+                    <div style={{ color: "#7C3AED", fontWeight: 700 }}>
+                      Seq2: {solution.align2.split("").map((c, i) => (
+                        <span key={i} style={{
+                          color: c === "-" ? "#CBD5E1" : solution.alignM[i] === "|" ? "#059669" : "#F59E0B",
+                          fontWeight: 700
+                        }}>{c}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 10, fontSize: 12, color: "#64748B" }}>
+                    <span style={{ color: "#059669" }}>|</span> = match{"  "}
+                    <span style={{ color: "#F59E0B" }}>.</span> = mismatch{"  "}
+                    <span style={{ color: "#CBD5E1" }}>−</span> = gap
+                  </div>
+                </div>
+              )}
+    
+              {/* Instructions */}
+              <div style={{
+                marginTop: 16, background: "white", borderRadius: 12, padding: 20,
+                boxShadow: "0 1px 3px rgba(0,0,0,0.08)", fontSize: 13, color: "#475569", lineHeight: 1.8
+              }}>
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1E293B", marginTop: 0, marginBottom: 8 }}>
+                  How to Use
+                </h3>
+                <p style={{ margin: "0 0 6px" }}>
+                  <strong>Fill the matrix:</strong> Click any cell and type the score you think belongs there. Use <kbd style={{ background: "#F1F5F9", padding: "1px 5px", borderRadius: 4, fontSize: 12 }}>Tab</kbd> or <kbd style={{ background: "#F1F5F9", padding: "1px 5px", borderRadius: 4, fontSize: 12 }}>Enter</kbd> to move to the next cell, or arrow keys to navigate.
+                </p>
+                <p style={{ margin: "0 0 6px" }}>
+                  <strong>Get hints:</strong> Click on any cell to see the calculation breakdown (diagonal, up, left values). Use the 👁 button on any cell to reveal its correct value.
+                </p>
+                <p style={{ margin: "0 0 6px" }}>
+                  <strong>Step-by-step mode:</strong> Walks through the algorithm one cell at a time with explanations — great for learning the order of operations.
+                </p>
+                <p style={{ margin: 0 }}>
+                  <strong>Check your work:</strong> Hit "Check Answers" to see which cells are correct (green), incorrect (red), or empty. Then try "Show Traceback" to see the optimal path.
+                </p>
+              </div>
+            </>
+          )}
+    
+          <div style={{ textAlign: "center", marginTop: 16, fontSize: 11, color: "#94A3B8" }}>
+            BSB511 / BENG451 — Bioinformatics Fundamentals — Pairwise Alignment Sandbox
+          </div>
+        </div>
+      );
+    }
+    
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>

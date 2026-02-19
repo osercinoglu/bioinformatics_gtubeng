@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DNA Sequence Explorer — BSB511 / BENG451</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; }
+    .back-link {
+      position: fixed; top: 12px; left: 12px; z-index: 1000;
+      padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 700;
+      background: rgba(15,23,42,0.85); color: #94A3B8; text-decoration: none;
+      border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(8px);
+      font-family: 'Inter', sans-serif; transition: all 0.2s;
+    }
+    .back-link:hover { color: #E2E8F0; border-color: rgba(255,255,255,0.3); }
+  </style>
+</head>
+<body>
+  <a href="index.html" class="back-link">← All Widgets</a>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useMemo, useCallback, useRef, useEffect } = React;
+
+    
+    const CODON_TABLE = {
+      "UUU":"F","UUC":"F","UUA":"L","UUG":"L","CUU":"L","CUC":"L","CUA":"L","CUG":"L",
+      "AUU":"I","AUC":"I","AUA":"I","AUG":"M","GUU":"V","GUC":"V","GUA":"V","GUG":"V",
+      "UCU":"S","UCC":"S","UCA":"S","UCG":"S","CCU":"P","CCC":"P","CCA":"P","CCG":"P",
+      "ACU":"T","ACC":"T","ACA":"T","ACG":"T","GCU":"A","GCC":"A","GCA":"A","GCG":"A",
+      "UAU":"Y","UAC":"Y","UAA":"*","UAG":"*","CAU":"H","CAC":"H","CAA":"Q","CAG":"Q",
+      "AAU":"N","AAC":"N","AAA":"K","AAG":"K","GAU":"D","GAC":"D","GAA":"E","GAG":"E",
+      "UGU":"C","UGC":"C","UGA":"*","UGG":"W","CGU":"R","CGC":"R","CGA":"R","CGG":"R",
+      "AGU":"S","AGC":"S","AGA":"R","AGG":"R","GGU":"G","GGC":"G","GGA":"G","GGG":"G"
+    };
+    
+    const AA_NAMES = {
+      "F":"Phe","L":"Leu","I":"Ile","M":"Met","V":"Val","S":"Ser","P":"Pro","T":"Thr",
+      "A":"Ala","Y":"Tyr","*":"Stop","H":"His","Q":"Gln","N":"Asn","K":"Lys","D":"Asp",
+      "E":"Glu","C":"Cys","W":"Trp","R":"Arg","G":"Gly"
+    };
+    
+    const AA_COLORS = {
+      "F":"#F59E0B","L":"#F59E0B","I":"#F59E0B","M":"#10B981","V":"#F59E0B",
+      "S":"#3B82F6","P":"#A855F7","T":"#3B82F6","A":"#6B7280",
+      "Y":"#3B82F6","*":"#EF4444","H":"#06B6D4","Q":"#06B6D4",
+      "N":"#3B82F6","K":"#06B6D4","D":"#F43F5E","E":"#F43F5E",
+      "C":"#F59E0B","W":"#F59E0B","R":"#06B6D4","G":"#6B7280"
+    };
+    
+    const complement = (base) => ({A:"T",T:"A",G:"C",C:"G"}[base] || "?");
+    const toRNA = (base) => ({A:"A",T:"U",G:"G",C:"C"}[base] || "?");
+    
+    function translate(rnaSeq) {
+      const codons = [];
+      for (let i = 0; i + 2 < rnaSeq.length; i += 3) {
+        const codon = rnaSeq.substring(i, i + 3);
+        const aa = CODON_TABLE[codon] || "?";
+        codons.push({ codon, aa, pos: i });
+      }
+      return codons;
+    }
+    
+    function findORFs(codons) {
+      const orfs = [];
+      let inORF = false;
+      let start = 0;
+      for (let i = 0; i < codons.length; i++) {
+        if (codons[i].aa === "M" && !inORF) {
+          inORF = true;
+          start = i;
+        } else if (codons[i].aa === "*" && inORF) {
+          orfs.push({ start, end: i, length: i - start });
+          inORF = false;
+        }
+      }
+      return orfs;
+    }
+    
+    function SixFrameView({ dna }) {
+      const revComp = dna.split("").reverse().map(complement).join("");
+    
+      const frames = [];
+      for (let f = 0; f < 3; f++) {
+        const rna = dna.substring(f).split("").map(toRNA).join("");
+        const codons = translate(rna);
+        const orfs = findORFs(codons);
+        frames.push({ label: `+${f + 1}`, codons, orfs, offset: f, strand: "+" });
+      }
+      for (let f = 0; f < 3; f++) {
+        const rna = revComp.substring(f).split("").map(toRNA).join("");
+        const codons = translate(rna);
+        const orfs = findORFs(codons);
+        frames.push({ label: `−${f + 1}`, codons, orfs, offset: f, strand: "−" });
+      }
+    
+      return (
+        <div>
+          <h3 style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 12 }}>
+            Six Reading Frames
+          </h3>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {frames.map((frame) => {
+              const longestORF = frame.orfs.length > 0
+                ? frame.orfs.reduce((a, b) => a.length > b.length ? a : b)
+                : null;
+              return (
+                <div key={frame.label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{
+                    fontFamily: "monospace", fontWeight: 700, fontSize: 13,
+                    color: frame.strand === "+" ? "#059669" : "#7C3AED",
+                    width: 28, textAlign: "right", flexShrink: 0
+                  }}>
+                    {frame.label}
+                  </span>
+                  <div style={{
+                    display: "flex", flexWrap: "wrap", gap: 1,
+                    fontFamily: "monospace", fontSize: 12, lineHeight: 1.4
+                  }}>
+                    {frame.codons.slice(0, 60).map((c, i) => {
+                      const inORF = longestORF && i >= longestORF.start && i <= longestORF.end;
+                      const isStart = c.aa === "M";
+                      const isStop = c.aa === "*";
+                      return (
+                        <span
+                          key={i}
+                          title={`${c.codon} → ${c.aa} (${AA_NAMES[c.aa] || "?"})`}
+                          style={{
+                            padding: "1px 3px",
+                            borderRadius: 3,
+                            backgroundColor: isStop ? "#FEE2E2" : isStart ? "#D1FAE5" : inORF ? "#EFF6FF" : "transparent",
+                            color: isStop ? "#DC2626" : isStart ? "#059669" : inORF ? "#1E40AF" : "#64748B",
+                            fontWeight: inORF || isStart || isStop ? 700 : 400,
+                            cursor: "default",
+                            border: inORF ? "1px solid #BFDBFE" : "1px solid transparent"
+                          }}
+                        >
+                          {c.aa}
+                        </span>
+                      );
+                    })}
+                    {frame.codons.length > 60 && <span style={{ color: "#94A3B8" }}>…</span>}
+                  </div>
+                  {longestORF && (
+                    <span style={{
+                      fontSize: 10, color: "#059669", backgroundColor: "#ECFDF5",
+                      padding: "2px 6px", borderRadius: 10, whiteSpace: "nowrap", flexShrink: 0
+                    }}>
+                      ORF: {longestORF.length} aa
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: 10, display: "flex", gap: 16, fontSize: 11, color: "#64748B" }}>
+            <span><span style={{ color: "#059669", fontWeight: 700 }}>M</span> = Start (AUG)</span>
+            <span><span style={{ color: "#DC2626", fontWeight: 700 }}>*</span> = Stop</span>
+            <span style={{ color: "#1E40AF" }}>■ Highlighted = longest ORF</span>
+          </div>
+        </div>
+      );
+    }
+    
+    function CodonWheel({ hoveredAA, onHover }) {
+      const groups = {};
+      Object.entries(CODON_TABLE).forEach(([codon, aa]) => {
+        if (!groups[aa]) groups[aa] = [];
+        groups[aa].push(codon);
+      });
+    
+      return (
+        <div>
+          <h3 style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 10 }}>
+            Codon Table
+          </h3>
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4
+          }}>
+            {Object.entries(groups).map(([aa, codons]) => (
+              <div
+                key={aa}
+                onMouseEnter={() => onHover(aa)}
+                onMouseLeave={() => onHover(null)}
+                style={{
+                  padding: "6px 4px", borderRadius: 6, textAlign: "center", cursor: "default",
+                  backgroundColor: hoveredAA === aa ? AA_COLORS[aa] + "22" : "#F8FAFC",
+                  border: `2px solid ${hoveredAA === aa ? AA_COLORS[aa] : "transparent"}`,
+                  transition: "all 0.15s"
+                }}
+              >
+                <div style={{ fontSize: 18, fontWeight: 800, color: AA_COLORS[aa], fontFamily: "monospace" }}>
+                  {aa === "*" ? "⬛" : aa}
+                </div>
+                <div style={{ fontSize: 9, color: "#64748B", fontWeight: 600 }}>{AA_NAMES[aa]}</div>
+                <div style={{ fontSize: 9, color: "#94A3B8", marginTop: 2, lineHeight: 1.3 }}>
+                  {codons.join(" ")}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    
+    const EXAMPLES = {
+      "HBA1 (α-globin)": "ATGGTGCTGTCTCCTGCCGACAAGACCAACGTCAAGGCCGCCTGGGGTAAGGTCGGCGCGCACGCTGGCGAGTATGGTGCGGAGGCCCTGGAGAGGATGTTCCTGTCCTTCCCCACCACCAAGACCTACTTCCCGCACTTCGACCTGAGCCACGGCTCTGCCCAGGTTAAGGGCCACGGCAAGAAGGTGGCCGACGCGCTGACCAACGCCGTGGCGCACGTGGACGACATGCCCAACGCGCTGTCCGCCCTGAGCGACCTGCACGCGCACAAGCTTCGGGTGGACCCGGTCAACTTCAAGCTCCTAAGCCACTGCCTGCTGGTGACCCTGGCCGCCCACCTCCCCGCCGAGTTCACCCCUGCGGTGCACGCCTCCCTGGACAAGTTCCTGGCTTCTGTGAGCACCGTGCTGACCTCCAAATACCGTTAA",
+      "Insulin signal": "ATGGCCCTGTGGATGCGCCTCCTGCCCCTGCTGGCGCTGCTGGCCCTCTGGGGACCTGACCCAGCCGCAGCCTTTGTGAACCAACACCTGTGCGGCTCACACCTGGTGGAAGCTCTCTACCTAGTGTGCGGGGAACGA",
+      "Custom": ""
+    };
+    
+    const App = function DNAExplorer() {
+      const [dna, setDna] = useState(EXAMPLES["HBA1 (α-globin)"]);
+      const [activeTab, setActiveTab] = useState("transcribe");
+      const [hoveredAA, setHoveredAA] = useState(null);
+      const [selectedExample, setSelectedExample] = useState("HBA1 (α-globin)");
+    
+      const cleanDNA = useMemo(() => dna.toUpperCase().replace(/[^ATGC]/g, ""), [dna]);
+    
+      const mRNA = useMemo(() => cleanDNA.split("").map(toRNA).join(""), [cleanDNA]);
+      const protein = useMemo(() => translate(mRNA), [mRNA]);
+    
+      const stats = useMemo(() => {
+        const a = (cleanDNA.match(/A/g)||[]).length;
+        const t = (cleanDNA.match(/T/g)||[]).length;
+        const g = (cleanDNA.match(/G/g)||[]).length;
+        const c = (cleanDNA.match(/C/g)||[]).length;
+        const gc = cleanDNA.length > 0 ? ((g+c)/cleanDNA.length*100).toFixed(1) : 0;
+        return { a, t, g, c, gc, total: cleanDNA.length };
+      }, [cleanDNA]);
+    
+      const tabs = [
+        { id: "transcribe", label: "Transcription & Translation" },
+        { id: "frames", label: "6-Frame Reading" },
+        { id: "codons", label: "Codon Table" }
+      ];
+    
+      return (
+        <div style={{
+          fontFamily: "'Inter', -apple-system, sans-serif",
+          maxWidth: 860, margin: "0 auto", padding: 20,
+          background: "linear-gradient(135deg, #F0F9FF 0%, #FDF4FF 100%)",
+          minHeight: "100vh"
+        }}>
+          <div style={{ textAlign: "center", marginBottom: 24 }}>
+            <h1 style={{ fontSize: 24, fontWeight: 800, color: "#0F172A", margin: 0 }}>
+              🧬 DNA Sequence Explorer
+            </h1>
+            <p style={{ fontSize: 13, color: "#64748B", margin: "6px 0 0" }}>
+              Central Dogma Interactive — BSB511 / BENG451
+            </p>
+          </div>
+    
+          {/* Input */}
+          <div style={{
+            background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <label style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>
+                DNA Sequence (5′ → 3′, sense strand)
+              </label>
+              <div style={{ display: "flex", gap: 6 }}>
+                {Object.keys(EXAMPLES).map((name) => (
+                  <button
+                    key={name}
+                    onClick={() => {
+                      setSelectedExample(name);
+                      if (name !== "Custom") setDna(EXAMPLES[name]);
+                    }}
+                    style={{
+                      padding: "4px 10px", fontSize: 11, borderRadius: 6, cursor: "pointer",
+                      border: selectedExample === name ? "2px solid #6366F1" : "1px solid #E2E8F0",
+                      background: selectedExample === name ? "#EEF2FF" : "white",
+                      color: selectedExample === name ? "#4338CA" : "#64748B",
+                      fontWeight: selectedExample === name ? 700 : 500
+                    }}
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <textarea
+              value={dna}
+              onChange={(e) => { setDna(e.target.value); setSelectedExample("Custom"); }}
+              spellCheck={false}
+              style={{
+                width: "100%", height: 80, fontFamily: "monospace", fontSize: 13,
+                border: "2px solid #E2E8F0", borderRadius: 8, padding: 10,
+                resize: "vertical", outline: "none", lineHeight: 1.5, boxSizing: "border-box",
+                color: "#1E293B", letterSpacing: 0.5
+              }}
+              placeholder="Paste or type a DNA sequence (A, T, G, C only)..."
+            />
+            {/* Stats bar */}
+            <div style={{
+              display: "flex", gap: 16, marginTop: 10, fontSize: 12, color: "#64748B",
+              flexWrap: "wrap"
+            }}>
+              <span><strong>{stats.total}</strong> bp</span>
+              <span style={{ color: "#EF4444" }}>A: {stats.a}</span>
+              <span style={{ color: "#3B82F6" }}>T: {stats.t}</span>
+              <span style={{ color: "#F59E0B" }}>G: {stats.g}</span>
+              <span style={{ color: "#10B981" }}>C: {stats.c}</span>
+              <span>GC content: <strong>{stats.gc}%</strong></span>
+              <span>Codons: <strong>{Math.floor(stats.total / 3)}</strong></span>
+            </div>
+          </div>
+    
+          {/* Tabs */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                style={{
+                  padding: "10px 18px", fontSize: 13, fontWeight: 600,
+                  borderRadius: "10px 10px 0 0", cursor: "pointer",
+                  border: "none",
+                  background: activeTab === tab.id ? "white" : "rgba(255,255,255,0.5)",
+                  color: activeTab === tab.id ? "#4338CA" : "#64748B",
+                  boxShadow: activeTab === tab.id ? "0 1px 3px rgba(0,0,0,0.08)" : "none"
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+    
+          {/* Tab content */}
+          <div style={{
+            background: "white", borderRadius: "0 12px 12px 12px", padding: 24,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.08)", minHeight: 300
+          }}>
+            {activeTab === "transcribe" && cleanDNA.length > 0 && (
+              <div>
+                {/* DNA → mRNA */}
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 8, marginBottom: 8
+                  }}>
+                    <span style={{
+                      fontSize: 11, fontWeight: 700, color: "white", background: "#6366F1",
+                      padding: "3px 8px", borderRadius: 5
+                    }}>
+                      STEP 1
+                    </span>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: "#1E293B" }}>
+                      Transcription: DNA → mRNA
+                    </span>
+                  </div>
+                  <div style={{
+                    background: "#F8FAFC", borderRadius: 8, padding: 14, overflowX: "auto"
+                  }}>
+                    <div style={{ fontFamily: "monospace", fontSize: 13, lineHeight: 2.2 }}>
+                      <div style={{ color: "#64748B", marginBottom: 2 }}>
+                        <span style={{ color: "#94A3B8", fontSize: 11, marginRight: 8 }}>5′</span>
+                        {cleanDNA.substring(0, 120).split("").map((b, i) => (
+                          <span key={`dna-${i}`} style={{
+                            color: { A: "#EF4444", T: "#3B82F6", G: "#F59E0B", C: "#10B981" }[b],
+                            fontWeight: 600
+                          }}>{b}</span>
+                        ))}
+                        {cleanDNA.length > 120 && <span style={{ color: "#94A3B8" }}> …</span>}
+                        <span style={{ color: "#94A3B8", fontSize: 11, marginLeft: 8 }}>3′</span>
+                      </div>
+                      <div style={{ color: "#94A3B8", fontSize: 11, marginBottom: 2, letterSpacing: 3 }}>
+                        {cleanDNA.substring(0, 120).split("").map((_, i) => <span key={`pipe-${i}`}>│</span>)}
+                      </div>
+                      <div>
+                        <span style={{ color: "#94A3B8", fontSize: 11, marginRight: 8 }}>5′</span>
+                        {mRNA.substring(0, 120).split("").map((b, i) => (
+                          <span key={`rna-${i}`} style={{
+                            color: { A: "#EF4444", U: "#8B5CF6", G: "#F59E0B", C: "#10B981" }[b],
+                            fontWeight: 600
+                          }}>{b}</span>
+                        ))}
+                        {mRNA.length > 120 && <span style={{ color: "#94A3B8" }}> …</span>}
+                        <span style={{ color: "#94A3B8", fontSize: 11, marginLeft: 8 }}>3′</span>
+                      </div>
+                    </div>
+                  </div>
+                  <p style={{ fontSize: 11, color: "#94A3B8", marginTop: 6, fontStyle: "italic" }}>
+                    T → U replacement. The mRNA strand is read 5′ → 3′ by the ribosome.
+                  </p>
+                </div>
+    
+                {/* mRNA → Protein */}
+                <div>
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 8, marginBottom: 8
+                  }}>
+                    <span style={{
+                      fontSize: 11, fontWeight: 700, color: "white", background: "#059669",
+                      padding: "3px 8px", borderRadius: 5
+                    }}>
+                      STEP 2
+                    </span>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: "#1E293B" }}>
+                      Translation: mRNA → Protein
+                    </span>
+                  </div>
+                  <div style={{
+                    background: "#F8FAFC", borderRadius: 8, padding: 14, overflowX: "auto"
+                  }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 2, fontFamily: "monospace" }}>
+                      {protein.slice(0, 80).map((c, i) => (
+                        <div
+                          key={i}
+                          onMouseEnter={() => setHoveredAA(c.aa)}
+                          onMouseLeave={() => setHoveredAA(null)}
+                          style={{
+                            display: "flex", flexDirection: "column", alignItems: "center",
+                            padding: "4px 3px", borderRadius: 6, cursor: "default",
+                            background: hoveredAA === c.aa ? AA_COLORS[c.aa] + "18" : "transparent",
+                            border: c.aa === "M" ? "2px solid #10B981" : c.aa === "*" ? "2px solid #EF4444" : "1px solid #E2E8F0",
+                            minWidth: 36, transition: "all 0.1s"
+                          }}
+                        >
+                          <span style={{ fontSize: 10, color: "#94A3B8" }}>{c.codon}</span>
+                          <span style={{
+                            fontSize: 16, fontWeight: 800,
+                            color: AA_COLORS[c.aa] || "#334155"
+                          }}>
+                            {c.aa === "*" ? "■" : c.aa}
+                          </span>
+                          <span style={{ fontSize: 9, color: "#94A3B8" }}>{AA_NAMES[c.aa]}</span>
+                        </div>
+                      ))}
+                      {protein.length > 80 && (
+                        <span style={{ alignSelf: "center", color: "#94A3B8", fontSize: 13 }}>
+                          …+{protein.length - 80} more
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <p style={{ fontSize: 11, color: "#94A3B8", marginTop: 6, fontStyle: "italic" }}>
+                    Hover over amino acids to highlight all instances. Green border = start codon (Met). Red border = stop codon.
+                  </p>
+                </div>
+              </div>
+            )}
+    
+            {activeTab === "frames" && cleanDNA.length > 0 && (
+              <SixFrameView dna={cleanDNA} />
+            )}
+    
+            {activeTab === "codons" && (
+              <CodonWheel hoveredAA={hoveredAA} onHover={setHoveredAA} />
+            )}
+    
+            {cleanDNA.length === 0 && activeTab !== "codons" && (
+              <div style={{ textAlign: "center", padding: 40, color: "#94A3B8" }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>🧬</div>
+                <p>Paste a DNA sequence above to get started</p>
+              </div>
+            )}
+          </div>
+    
+          <div style={{
+            textAlign: "center", marginTop: 16, fontSize: 11, color: "#94A3B8"
+          }}>
+            BSB511 / BENG451 — Bioinformatics Fundamentals — Interactive Learning Widget
+          </div>
+        </div>
+      );
+    }
+    
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>

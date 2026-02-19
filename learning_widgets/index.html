@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BSB511 / BENG451 — Interactive Bioinformatics Widgets</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
+      min-height: 100vh; color: #E2E8F0;
+    }
+    .hero {
+      text-align: center; padding: 60px 20px 40px;
+    }
+    .hero h1 {
+      font-size: 2.4rem; font-weight: 800; margin-bottom: 8px;
+      background: linear-gradient(135deg, #60A5FA, #A78BFA, #F472B6);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .hero p { color: #94A3B8; font-size: 1rem; max-width: 600px; margin: 0 auto; }
+    .grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px; max-width: 960px; margin: 0 auto; padding: 0 20px 60px;
+    }
+    .card {
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px; padding: 28px; transition: all 0.25s;
+      text-decoration: none; color: inherit; display: block;
+    }
+    .card:hover {
+      background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2);
+      transform: translateY(-4px); box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+    }
+    .card .icon { font-size: 2.2rem; margin-bottom: 14px; }
+    .card h2 { font-size: 1.15rem; font-weight: 700; margin-bottom: 8px; color: #F1F5F9; }
+    .card p { font-size: 0.85rem; line-height: 1.6; color: #94A3B8; }
+    .card .tag {
+      display: inline-block; margin-top: 12px; padding: 4px 10px;
+      border-radius: 8px; font-size: 0.7rem; font-weight: 700;
+      background: rgba(99,102,241,0.2); color: #A5B4FC;
+    }
+    .footer {
+      text-align: center; padding: 20px; font-size: 0.75rem; color: #475569;
+    }
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <h1>🧬 Bioinformatics Interactive Lab</h1>
+    <p>BSB511 / BENG451 — Hands-on widgets to explore core bioinformatics concepts</p>
+  </div>
+  <div class="grid">
+    <a class="card" href="dna-explorer.html">
+      <div class="icon">🧬</div>
+      <h2>DNA Sequence Explorer</h2>
+      <p>Transcription, translation, 6-frame reading, codon table. Paste any DNA sequence and watch the central dogma in action.</p>
+      <span class="tag">Central Dogma</span>
+    </a>
+    <a class="card" href="alignment-sandbox.html">
+      <div class="icon">🧮</div>
+      <h2>Pairwise Alignment Sandbox</h2>
+      <p>Fill in Needleman-Wunsch and Smith-Waterman DP matrices by hand, check your work, step through the algorithm.</p>
+      <span class="tag">Sequence Alignment</span>
+    </a>
+    <a class="card" href="phylo-interpreter.html">
+      <div class="icon">🌳</div>
+      <h2>Phylogenetic Tree Interpreter</h2>
+      <p>Build UPGMA and Neighbor-Joining trees step-by-step from distance matrices. Visualize and export in Newick format.</p>
+      <span class="tag">Molecular Evolution</span>
+    </a>
+    <a class="card" href="motif-finder.html">
+      <div class="icon">🔍</div>
+      <h2>Sequence Motif Finder</h2>
+      <p>Scan proteins and DNA for functional motifs using PROSITE patterns. Highlight glycosylation sites, restriction sites, and more.</p>
+      <span class="tag">Functional Annotation</span>
+    </a>
+  </div>
+  <div class="footer">
+    BSB511 / BENG451 — Bioinformatics Fundamentals — 2025-2026 Spring Semester
+  </div>
+</body>
+</html>

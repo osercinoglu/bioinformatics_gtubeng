@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sequence Motif Finder — BSB511 / BENG451</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; }
+    .back-link {
+      position: fixed; top: 12px; left: 12px; z-index: 1000;
+      padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 700;
+      background: rgba(15,23,42,0.85); color: #94A3B8; text-decoration: none;
+      border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(8px);
+      font-family: 'Inter', sans-serif; transition: all 0.2s;
+    }
+    .back-link:hover { color: #E2E8F0; border-color: rgba(255,255,255,0.3); }
+  </style>
+</head>
+<body>
+  <a href="index.html" class="back-link">← All Widgets</a>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useMemo, useCallback, useRef, useEffect } = React;
+
+    
+    /* ─── PROSITE-style pattern → JS regex converter ─── */
+    function prositeToRegex(pattern) {
+      // PROSITE notation:
+      // - = separator (ignore), x = any, [] = one of, {} = not one of
+      // () = repeats e.g. x(2,4), < = N-term, > = C-term
+      let p = pattern.trim().replace(/\.$/, "");
+      let parts = p.split("-").filter(Boolean);
+      let regex = "";
+      for (let part of parts) {
+        if (part === "<") { regex += "^"; continue; }
+        if (part === ">") { regex += "$"; continue; }
+    
+        // Handle repeats like x(2,5) or A(3)
+        let core = part;
+        let repeat = "";
+        const repMatch = part.match(/^(.+?)\((\d+(?:,\d+)?)\)$/);
+        if (repMatch) {
+          core = repMatch[1];
+          const nums = repMatch[2];
+          if (nums.includes(",")) {
+            const [a, b] = nums.split(",");
+            repeat = `{${a},${b}}`;
+          } else {
+            repeat = `{${nums}}`;
+          }
+        }
+    
+        if (core === "x" || core === "X") {
+          regex += "." + repeat;
+        } else if (core.startsWith("[") && core.endsWith("]")) {
+          regex += core + repeat;
+        } else if (core.startsWith("{") && core.endsWith("}")) {
+          const inner = core.slice(1, -1);
+          regex += `[^${inner}]` + repeat;
+        } else if (core.length === 1 && /[A-Z]/.test(core)) {
+          regex += core + repeat;
+        } else {
+          // fallback: treat as literal
+          regex += core + repeat;
+        }
+      }
+      return regex;
+    }
+    
+    /* ─── Known motifs library ─── */
+    const MOTIF_LIBRARY = {
+      "Protein Motifs": [
+        { name: "N-glycosylation site", prosite: "N-{P}-[ST]-{P}", id: "PS00001", description: "Asn-Xaa-Ser/Thr sequon for N-linked glycosylation. Xaa cannot be Pro." },
+        { name: "Casein kinase II phosphorylation", prosite: "[ST]-x(2)-[DE]", id: "PS00006", description: "Ser/Thr followed by 2 residues then Asp/Glu. One of the most common phosphorylation motifs." },
+        { name: "Protein kinase C phosphorylation", prosite: "[ST]-x-[RK]", id: "PS00005", description: "Ser/Thr followed by any residue then Arg/Lys." },
+        { name: "N-myristoylation site", prosite: "G-{EDRKHPFYW}-x(2)-[STAGCN]-{P}", id: "PS00008", description: "Gly at N-terminus for lipid modification anchoring protein to membrane." },
+        { name: "RGD cell attachment", prosite: "R-G-D", id: "PS00016", description: "Arg-Gly-Asp tripeptide recognized by integrins for cell adhesion." },
+        { name: "Zinc finger C2H2-type", prosite: "C-x(2,4)-C-x(3)-[LIVMFYWC]-x(8)-H-x(3,5)-H", id: "PS00028", description: "Classic zinc finger DNA-binding domain. Two Cys and two His coordinate a zinc ion." },
+        { name: "EF-hand calcium-binding", prosite: "D-x-[DNS]-{ILVFYW}-[DENSTG]-[DNQGHRK]-{GP}-[LIVMC]-[DENQSTAGC]-x(2)-[DE]", id: "PS00018", description: "Helix-loop-helix motif that binds Ca²⁺ ions. Found in calmodulin, troponin C." },
+        { name: "ATP/GTP-binding (P-loop)", prosite: "[AG]-x(4)-G-K-[ST]", id: "PS00017", description: "Walker A motif / phosphate-binding loop in NTPases and kinases." },
+      ],
+      "DNA Motifs": [
+        { name: "TATA box", regex: "TATA[AT]A[AT]", description: "Core promoter element ~25bp upstream of transcription start. Bound by TBP." },
+        { name: "Kozak consensus", regex: "[AG]..ATGG", description: "Translation initiation context around the start codon in eukaryotic mRNA." },
+        { name: "CpG dinucleotide", regex: "CG", description: "Target for DNA methylation. CpG islands near promoters regulate gene expression." },
+        { name: "Restriction site EcoRI", regex: "GAATTC", description: "Recognition site for EcoRI restriction endonuclease. Cuts between G and A." },
+        { name: "Restriction site BamHI", regex: "GGATCC", description: "Recognition site for BamHI. Cuts between the two G residues." },
+        { name: "Restriction site HindIII", regex: "AAGCTT", description: "Recognition site for HindIII restriction endonuclease." },
+        { name: "Poly-A signal", regex: "AATAAA", description: "Polyadenylation signal in 3' UTR of eukaryotic mRNA, ~10-30nt upstream of cleavage site." },
+        { name: "Shine-Dalgarno (prokaryotic RBS)", regex: "AGGAGG", description: "Ribosome binding site in prokaryotic mRNA, complementary to 16S rRNA 3' end." },
+      ]
+    };
+    
+    /* ─── Example sequences ─── */
+    const EXAMPLE_SEQUENCES = {
+      "Human Insulin (protein)": {
+        type: "protein",
+        seq: `>sp|P01308|INS_HUMAN Insulin [Homo sapiens]
+    MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKTRREAED
+    LQVGQVELGGGPGAGSLQPLALEGSLQKRGIVEQCCTSICSLYQLENYCN`
+      },
+      "Calmodulin (protein)": {
+        type: "protein",
+        seq: `>sp|P0DP23|CALM1_HUMAN Calmodulin-1 [Homo sapiens]
+    MADQLTEEQIAEFKEAFSLFDKDGDGTITTKELGTVMRSLGQNPTEAELQDMINEVDADG
+    NGTIDFPEFLTMMARKMKDTDSEEEIREAFRVFDKDGNGYISAAELRHVMTNLGEKLTDE
+    EVDEMIREADIDGDGQVNYEEFVQMMTAK`
+      },
+      "HBA1 α-globin (protein)": {
+        type: "protein",
+        seq: `>sp|P69905|HBA_HUMAN Hemoglobin alpha [Homo sapiens]
+    MVLSPADKTNVKAAWGKVGAHAGEYGAEALERMFLSFPTTKTYFPHFDLSHGSAQVKGHG
+    KKVADALTNAVAHVDDMPNALSALSDLHAHKLRVDPVNFKLLSHCLLVTLAAHLPAEFTP
+    AVHASLDKFLASVSTVLTSKYR`
+      },
+      "BRCA1 promoter (DNA)": {
+        type: "dna",
+        seq: `>BRCA1_promoter_region
+    GAATTCGAATTCTAGCTAGCTATATAAGCTAGCTAGCAGGAGGCGATCGATCGATCGAATTC
+    CGATCGGATCCAATAAAAAGCTTATATAATGCGATCGGGATCCAAGCTTGCGATCGATCG
+    AATAAAAGATCCGAATTCGATCGATCGATCGCGATCG`
+      },
+      "Custom": { type: "auto", seq: "" }
+    };
+    
+    /* ─── Parse FASTA ─── */
+    function parseFasta(text) {
+      const lines = text.trim().split("\n");
+      let header = "";
+      let seq = "";
+      for (const line of lines) {
+        if (line.startsWith(">")) {
+          header = line.substring(1).trim();
+        } else {
+          seq += line.trim().replace(/\s+/g, "").replace(/\d+/g, "");
+        }
+      }
+      return { header, seq: seq.toUpperCase() };
+    }
+    
+    /* ─── Detect sequence type ─── */
+    function detectType(seq) {
+      const dnaChars = new Set("ATGCUN");
+      const clean = seq.toUpperCase().replace(/[^A-Z]/g, "");
+      let dnaCount = 0;
+      for (const c of clean) { if (dnaChars.has(c)) dnaCount++; }
+      return dnaCount / clean.length > 0.85 ? "dna" : "protein";
+    }
+    
+    /* ─── Find all matches with positions ─── */
+    function findMatches(seq, regexStr) {
+      try {
+        const re = new RegExp(regexStr, "g");
+        const matches = [];
+        let m;
+        while ((m = re.exec(seq)) !== null) {
+          matches.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
+          if (m[0].length === 0) break; // prevent infinite loop on zero-length matches
+        }
+        return { matches, error: null };
+      } catch (e) {
+        return { matches: [], error: e.message };
+      }
+    }
+    
+    /* ─── Color palette for matches ─── */
+    const MATCH_COLORS = [
+      { bg: "#FEF3C7", border: "#F59E0B", text: "#92400E" },
+      { bg: "#DBEAFE", border: "#3B82F6", text: "#1E3A8A" },
+      { bg: "#D1FAE5", border: "#10B981", text: "#065F46" },
+      { bg: "#FCE7F3", border: "#EC4899", text: "#831843" },
+      { bg: "#E0E7FF", border: "#6366F1", text: "#312E81" },
+      { bg: "#FED7AA", border: "#F97316", text: "#7C2D12" },
+      { bg: "#CCFBF1", border: "#14B8A6", text: "#134E4A" },
+      { bg: "#FECDD3", border: "#F43F5E", text: "#881337" },
+    ];
+    
+    /* ─── Sequence display with highlighting ─── */
+    function HighlightedSequence({ seq, allMatches, lineWidth = 60 }) {
+      const posColors = useMemo(() => {
+        const arr = new Array(seq.length).fill(null);
+        allMatches.forEach((group, gi) => {
+          const color = MATCH_COLORS[gi % MATCH_COLORS.length];
+          group.matches.forEach(m => {
+            for (let p = m.start; p < m.end; p++) {
+              arr[p] = color;
+            }
+          });
+        });
+        return arr;
+      }, [seq, allMatches]);
+    
+      const lines = [];
+      for (let i = 0; i < seq.length; i += lineWidth) {
+        lines.push({ start: i, text: seq.substring(i, i + lineWidth) });
+      }
+    
+      return (
+        <div style={{ fontFamily: "monospace", fontSize: 13, lineHeight: 1.8, overflowX: "auto" }}>
+          {lines.map((line, li) => (
+            <div key={li} style={{ display: "flex", gap: 0, whiteSpace: "nowrap" }}>
+              <span style={{
+                color: "#94A3B8", fontSize: 11, width: 48, textAlign: "right",
+                marginRight: 10, flexShrink: 0, paddingTop: 2, userSelect: "none"
+              }}>
+                {line.start + 1}
+              </span>
+              <div>
+                {line.text.split("").map((ch, ci) => {
+                  const pos = line.start + ci;
+                  const color = posColors[pos];
+                  // insert space every 10 chars for readability
+                  const spacer = ci > 0 && ci % 10 === 0;
+                  return (
+                    <span key={ci}>
+                      {spacer && <span style={{ width: 4, display: "inline-block" }}> </span>}
+                      <span
+                        title={`Position ${pos + 1}`}
+                        style={{
+                          backgroundColor: color ? color.bg : "transparent",
+                          color: color ? color.text : "#334155",
+                          fontWeight: color ? 700 : 400,
+                          borderBottom: color ? `2px solid ${color.border}` : "none",
+                          padding: "1px 0",
+                          cursor: "default",
+                          letterSpacing: 0.5
+                        }}
+                      >{ch}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    
+    /* ─── Motif picker ─── */
+    function MotifPicker({ seqType, activeMotifs, onToggle }) {
+      const category = seqType === "dna" ? "DNA Motifs" : "Protein Motifs";
+      const motifs = MOTIF_LIBRARY[category] || [];
+    
+      return (
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBottom: 8 }}>
+            {category.toUpperCase()} LIBRARY — click to toggle
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {motifs.map((motif, i) => {
+              const isActive = activeMotifs.some(m => m.name === motif.name);
+              const color = MATCH_COLORS[activeMotifs.findIndex(m => m.name === motif.name) % MATCH_COLORS.length];
+              return (
+                <button
+                  key={i}
+                  onClick={() => onToggle(motif)}
+                  style={{
+                    padding: "6px 12px", fontSize: 11, fontWeight: 600, borderRadius: 8,
+                    cursor: "pointer", transition: "all 0.15s",
+                    border: isActive ? `2px solid ${color?.border || "#6366F1"}` : "1px solid #E2E8F0",
+                    background: isActive ? (color?.bg || "#EEF2FF") : "white",
+                    color: isActive ? (color?.text || "#4338CA") : "#64748B"
+                  }}
+                  title={motif.description}
+                >
+                  {motif.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+    
+    /* ─── PROSITE notation cheat sheet ─── */
+    function PrositeHelp() {
+      const rows = [
+        ["A-G-D", "Literal sequence Ala-Gly-Asp"],
+        ["x", "Any single amino acid"],
+        ["[ST]", "Ser OR Thr (one of the set)"],
+        ["{P}", "Any residue EXCEPT Pro"],
+        ["x(2,4)", "Any residue, repeated 2 to 4 times"],
+        ["A(3)", "Ala repeated exactly 3 times"],
+        ["<", "Must be at N-terminus"],
+        [">", "Must be at C-terminus"],
+        ["-", "Separator between elements"],
+      ];
+      return (
+        <div style={{
+          background: "#F8FAFC", borderRadius: 8, padding: 14, marginTop: 12,
+          fontSize: 12, lineHeight: 1.7
+        }}>
+          <div style={{ fontWeight: 700, color: "#334155", marginBottom: 6 }}>PROSITE Pattern Notation</div>
+          <table style={{ borderCollapse: "collapse", width: "100%" }}>
+            <tbody>
+              {rows.map(([notation, meaning], i) => (
+                <tr key={i}>
+                  <td style={{
+                    padding: "2px 10px 2px 0", fontFamily: "monospace", fontWeight: 700,
+                    color: "#6366F1", whiteSpace: "nowrap", verticalAlign: "top"
+                  }}>{notation}</td>
+                  <td style={{ padding: "2px 0", color: "#475569" }}>{meaning}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ marginTop: 8, color: "#64748B", fontSize: 11 }}>
+            Example: <span style={{ fontFamily: "monospace", color: "#6366F1", fontWeight: 600 }}>N-{"{P}"}-[ST]-{"{P}"}</span> matches Asn, any-except-Pro, Ser-or-Thr, any-except-Pro → N-glycosylation site (PS00001)
+          </div>
+        </div>
+      );
+    }
+    
+    /* ─── Main ─── */
+    const App = function MotifFinder() {
+      const defEx = "Calmodulin (protein)";
+      const [selectedExample, setSelectedExample] = useState(defEx);
+      const [inputText, setInputText] = useState(EXAMPLE_SEQUENCES[defEx].seq);
+      const [activeMotifs, setActiveMotifs] = useState([]);
+      const [customPattern, setCustomPattern] = useState("");
+      const [customIsProsite, setCustomIsProsite] = useState(true);
+      const [customName, setCustomName] = useState("Custom pattern");
+      const [showProsite, setShowProsite] = useState(false);
+      const [showStats, setShowStats] = useState(true);
+    
+      const parsed = useMemo(() => parseFasta(inputText), [inputText]);
+      const seqType = useMemo(() => {
+        const ex = EXAMPLE_SEQUENCES[selectedExample];
+        if (ex && ex.type !== "auto") return ex.type;
+        return detectType(parsed.seq);
+      }, [parsed.seq, selectedExample]);
+    
+      const toggleMotif = useCallback((motif) => {
+        setActiveMotifs(prev => {
+          const idx = prev.findIndex(m => m.name === motif.name);
+          if (idx >= 0) return prev.filter((_, i) => i !== idx);
+          if (prev.length >= 8) return prev; // max 8 simultaneous
+          return [...prev, motif];
+        });
+      }, []);
+    
+      const addCustomPattern = useCallback(() => {
+        if (!customPattern.trim()) return;
+        let regex;
+        if (customIsProsite) {
+          try { regex = prositeToRegex(customPattern); } catch { return; }
+        } else {
+          regex = customPattern;
+        }
+        const motif = {
+          name: customName || "Custom",
+          regex,
+          prosite: customIsProsite ? customPattern : undefined,
+          description: "User-defined pattern",
+          isCustom: true
+        };
+        setActiveMotifs(prev => {
+          if (prev.length >= 8) return prev;
+          return [...prev, motif];
+        });
+        setCustomPattern("");
+        setCustomName("Custom pattern");
+      }, [customPattern, customIsProsite, customName]);
+    
+      // Compute matches for all active motifs
+      const allResults = useMemo(() => {
+        return activeMotifs.map(motif => {
+          let regexStr;
+          if (motif.regex) {
+            regexStr = motif.regex;
+          } else if (motif.prosite) {
+            regexStr = prositeToRegex(motif.prosite);
+          } else {
+            return { motif, matches: [], regex: "", error: "No pattern" };
+          }
+          const { matches, error } = findMatches(parsed.seq, regexStr);
+          return { motif, matches, regex: regexStr, error };
+        });
+      }, [activeMotifs, parsed.seq]);
+    
+      const totalMatches = allResults.reduce((s, r) => s + r.matches.length, 0);
+    
+      // Amino acid / nucleotide composition in matches
+      const matchComposition = useMemo(() => {
+        const counts = {};
+        allResults.forEach(r => {
+          r.matches.forEach(m => {
+            for (const ch of m.text) {
+              counts[ch] = (counts[ch] || 0) + 1;
+            }
+          });
+        });
+        return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+      }, [allResults]);
+    
+      return (
+        <div style={{
+          fontFamily: "'Inter', -apple-system, sans-serif",
+          maxWidth: 920, margin: "0 auto", padding: 20,
+          background: "linear-gradient(135deg, #FDF4FF 0%, #EFF6FF 100%)",
+          minHeight: "100vh"
+        }}>
+          {/* Header */}
+          <div style={{ textAlign: "center", marginBottom: 20 }}>
+            <h1 style={{ fontSize: 24, fontWeight: 800, color: "#0F172A", margin: 0 }}>
+              🔍 Sequence Motif Finder
+            </h1>
+            <p style={{ fontSize: 13, color: "#64748B", margin: "6px 0 0" }}>
+              Find functional motifs in protein & DNA sequences — BSB511 / BENG451
+            </p>
+          </div>
+    
+          {/* Sequence input */}
+          <div style={{
+            background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <label style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>
+                Input Sequence (FASTA or raw)
+              </label>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                {Object.keys(EXAMPLE_SEQUENCES).map(name => (
+                  <button
+                    key={name}
+                    onClick={() => {
+                      setSelectedExample(name);
+                      if (name !== "Custom") {
+                        setInputText(EXAMPLE_SEQUENCES[name].seq);
+                        setActiveMotifs([]);
+                      }
+                    }}
+                    style={{
+                      padding: "4px 10px", fontSize: 11, borderRadius: 6, cursor: "pointer",
+                      border: selectedExample === name ? "2px solid #7C3AED" : "1px solid #E2E8F0",
+                      background: selectedExample === name ? "#F5F3FF" : "white",
+                      color: selectedExample === name ? "#6D28D9" : "#64748B", fontWeight: 600
+                    }}
+                  >{name}</button>
+                ))}
+              </div>
+            </div>
+            <textarea
+              value={inputText}
+              onChange={e => { setInputText(e.target.value); setSelectedExample("Custom"); }}
+              spellCheck={false}
+              style={{
+                width: "100%", height: 90, fontFamily: "monospace", fontSize: 12,
+                border: "2px solid #E2E8F0", borderRadius: 8, padding: 10,
+                resize: "vertical", outline: "none", lineHeight: 1.5, boxSizing: "border-box",
+                color: "#1E293B"
+              }}
+              placeholder="Paste a protein or DNA sequence here (FASTA format supported)..."
+            />
+            <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: 12, color: "#64748B", flexWrap: "wrap", alignItems: "center" }}>
+              {parsed.header && (
+                <span style={{ color: "#7C3AED", fontWeight: 600 }} title={parsed.header}>
+                  {parsed.header.length > 60 ? parsed.header.substring(0, 57) + "…" : parsed.header}
+                </span>
+              )}
+              <span><strong>{parsed.seq.length}</strong> {seqType === "dna" ? "nucleotides" : "residues"}</span>
+              <span style={{
+                padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 700,
+                background: seqType === "dna" ? "#DBEAFE" : "#F5F3FF",
+                color: seqType === "dna" ? "#1E40AF" : "#6D28D9"
+              }}>
+                {seqType === "dna" ? "DNA" : "PROTEIN"}
+              </span>
+            </div>
+          </div>
+    
+          {/* Motif Library */}
+          <div style={{
+            background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+          }}>
+            <MotifPicker seqType={seqType} activeMotifs={activeMotifs} onToggle={toggleMotif} />
+    
+            {/* Custom pattern input */}
+            <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #F1F5F9" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBottom: 8 }}>
+                CUSTOM PATTERN
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                <div style={{ flex: "1 1 200px" }}>
+                  <input
+                    value={customPattern}
+                    onChange={e => setCustomPattern(e.target.value)}
+                    placeholder={customIsProsite ? "e.g. N-{P}-[ST]-{P}" : "e.g. N[^P][ST][^P]"}
+                    spellCheck={false}
+                    style={{
+                      width: "100%", padding: "8px 10px", fontFamily: "monospace", fontSize: 13,
+                      border: "2px solid #E2E8F0", borderRadius: 8, outline: "none",
+                      boxSizing: "border-box", color: "#1E293B"
+                    }}
+                  />
+                </div>
+                <div style={{ width: 140 }}>
+                  <input
+                    value={customName}
+                    onChange={e => setCustomName(e.target.value)}
+                    placeholder="Label"
+                    style={{
+                      width: "100%", padding: "8px 10px", fontSize: 12,
+                      border: "2px solid #E2E8F0", borderRadius: 8, outline: "none",
+                      boxSizing: "border-box", color: "#1E293B"
+                    }}
+                  />
+                </div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {[["prosite", "PROSITE"], ["regex", "Regex"]].map(([id, label]) => (
+                    <button key={id} onClick={() => setCustomIsProsite(id === "prosite")} style={{
+                      padding: "8px 10px", fontSize: 11, fontWeight: 600, borderRadius: 6, cursor: "pointer",
+                      border: (customIsProsite ? "prosite" : "regex") === id ? "2px solid #6366F1" : "1px solid #E2E8F0",
+                      background: (customIsProsite ? "prosite" : "regex") === id ? "#EEF2FF" : "white",
+                      color: (customIsProsite ? "prosite" : "regex") === id ? "#4338CA" : "#94A3B8"
+                    }}>{label}</button>
+                  ))}
+                </div>
+                <button onClick={addCustomPattern} disabled={!customPattern.trim()} style={{
+                  padding: "8px 16px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                  border: "none", background: customPattern.trim() ? "#6366F1" : "#CBD5E1",
+                  color: "white", cursor: customPattern.trim() ? "pointer" : "default"
+                }}>+ Add</button>
+              </div>
+    
+              <div style={{ marginTop: 8 }}>
+                <button onClick={() => setShowProsite(!showProsite)} style={{
+                  padding: "4px 10px", fontSize: 11, borderRadius: 6, cursor: "pointer",
+                  border: "1px solid #E2E8F0", background: showProsite ? "#F5F3FF" : "white",
+                  color: showProsite ? "#6D28D9" : "#94A3B8", fontWeight: 600
+                }}>
+                  {showProsite ? "Hide" : "Show"} PROSITE notation help
+                </button>
+              </div>
+              {showProsite && <PrositeHelp />}
+            </div>
+          </div>
+    
+          {/* Active motifs & results summary */}
+          {activeMotifs.length > 0 && (
+            <div style={{
+              background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
+              boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>
+                  Active Motifs — <span style={{ color: "#6366F1" }}>{totalMatches} total matches</span>
+                </div>
+                <button onClick={() => setActiveMotifs([])} style={{
+                  padding: "4px 12px", fontSize: 11, borderRadius: 6, cursor: "pointer",
+                  border: "1px solid #FCA5A5", background: "white", color: "#DC2626", fontWeight: 600
+                }}>Clear All</button>
+              </div>
+    
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {allResults.map((result, gi) => {
+                  const color = MATCH_COLORS[gi % MATCH_COLORS.length];
+                  const motif = result.motif;
+                  return (
+                    <div key={gi} style={{
+                      display: "flex", gap: 12, alignItems: "flex-start",
+                      padding: "10px 14px", borderRadius: 8,
+                      border: `1px solid ${color.border}20`,
+                      background: `${color.bg}40`
+                    }}>
+                      <div style={{
+                        width: 8, height: 8, borderRadius: "50%", marginTop: 5, flexShrink: 0,
+                        background: color.border
+                      }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 700, fontSize: 13, color: color.text }}>
+                            {motif.name}
+                            {motif.id && <span style={{ fontSize: 10, color: "#94A3B8", marginLeft: 6 }}>{motif.id}</span>}
+                          </span>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{
+                              fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10,
+                              background: result.matches.length > 0 ? color.bg : "#F1F5F9",
+                              color: result.matches.length > 0 ? color.text : "#94A3B8"
+                            }}>
+                              {result.matches.length} {result.matches.length === 1 ? "hit" : "hits"}
+                            </span>
+                            <button onClick={() => toggleMotif(motif)} style={{
+                              fontSize: 10, background: "none", border: "none", cursor: "pointer",
+                              color: "#94A3B8", padding: 0
+                            }}>✕</button>
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 11, color: "#64748B", marginTop: 2 }}>
+                          {motif.description}
+                        </div>
+                        <div style={{ fontSize: 11, fontFamily: "monospace", color: "#94A3B8", marginTop: 4 }}>
+                          {motif.prosite && <span>PROSITE: <strong style={{ color: "#6366F1" }}>{motif.prosite}</strong> → </span>}
+                          Regex: <strong style={{ color: "#334155" }}>{result.regex}</strong>
+                        </div>
+                        {result.error && (
+                          <div style={{ fontSize: 11, color: "#DC2626", marginTop: 4 }}>Error: {result.error}</div>
+                        )}
+                        {result.matches.length > 0 && (
+                          <div style={{ fontSize: 11, color: "#64748B", marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
+                            {result.matches.slice(0, 20).map((m, mi) => (
+                              <span key={mi} style={{
+                                padding: "2px 6px", borderRadius: 4, fontFamily: "monospace",
+                                background: color.bg, color: color.text, fontWeight: 600, fontSize: 11
+                              }}>
+                                {m.start + 1}–{m.end}: {m.text}
+                              </span>
+                            ))}
+                            {result.matches.length > 20 && (
+                              <span style={{ color: "#94A3B8", fontSize: 11 }}>
+                                +{result.matches.length - 20} more
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+    
+          {/* Highlighted sequence view */}
+          {parsed.seq.length > 0 && (
+            <div style={{
+              background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
+              boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 12 }}>
+                Sequence View
+                {activeMotifs.length === 0 && (
+                  <span style={{ fontWeight: 400, color: "#94A3B8", marginLeft: 8 }}>
+                    — select motifs above to highlight matches
+                  </span>
+                )}
+              </div>
+              <div style={{
+                background: "#FAFBFC", borderRadius: 8, padding: 14, overflowX: "auto"
+              }}>
+                <HighlightedSequence seq={parsed.seq} allMatches={allResults} lineWidth={60} />
+              </div>
+            </div>
+          )}
+    
+          {/* Statistics */}
+          {showStats && totalMatches > 0 && (
+            <div style={{
+              background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
+              boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+            }}>
+              <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1E293B", marginTop: 0, marginBottom: 10 }}>
+                Match Statistics
+              </h3>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+                <div style={{ background: "#F8FAFC", borderRadius: 8, padding: 14, textAlign: "center" }}>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: "#6366F1" }}>{totalMatches}</div>
+                  <div style={{ fontSize: 11, color: "#64748B" }}>Total matches</div>
+                </div>
+                <div style={{ background: "#F8FAFC", borderRadius: 8, padding: 14, textAlign: "center" }}>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: "#059669" }}>{activeMotifs.length}</div>
+                  <div style={{ fontSize: 11, color: "#64748B" }}>Active motifs</div>
+                </div>
+                <div style={{ background: "#F8FAFC", borderRadius: 8, padding: 14, textAlign: "center" }}>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: "#F59E0B" }}>
+                    {parsed.seq.length > 0 ? (totalMatches / parsed.seq.length * 1000).toFixed(1) : 0}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#64748B" }}>Hits per 1000 residues</div>
+                </div>
+                <div style={{ background: "#F8FAFC", borderRadius: 8, padding: 14, textAlign: "center" }}>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: "#EC4899" }}>
+                    {(new Set(allResults.flatMap(r => r.matches.flatMap(m => {
+                      const positions = [];
+                      for (let p = m.start; p < m.end; p++) positions.push(p);
+                      return positions;
+                    })))).size}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#64748B" }}>Residues in motifs</div>
+                </div>
+              </div>
+    
+              {matchComposition.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBottom: 6 }}>
+                    RESIDUE COMPOSITION IN MATCHED REGIONS
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                    {matchComposition.slice(0, 20).map(([ch, count]) => (
+                      <div key={ch} style={{
+                        padding: "4px 8px", borderRadius: 6, background: "#F8FAFC",
+                        fontSize: 12, fontFamily: "monospace", textAlign: "center",
+                        border: "1px solid #E2E8F0"
+                      }}>
+                        <span style={{ fontWeight: 800, color: "#334155" }}>{ch}</span>
+                        <span style={{ color: "#94A3B8", marginLeft: 4 }}>×{count}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+    
+          {/* Educational panel */}
+          <div style={{
+            background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+          }}>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1E293B", marginTop: 0, marginBottom: 10 }}>
+              Why Sequence Motifs Matter
+            </h3>
+            <div style={{ fontSize: 13, color: "#475569", lineHeight: 1.8 }}>
+              <p style={{ margin: "0 0 10px" }}>
+                Sequence motifs are short, conserved patterns that indicate <strong>biological function</strong>. 
+                A motif can tell you whether a protein gets glycosylated, phosphorylated, anchored to a membrane, 
+                or binds DNA — purely from the amino acid sequence, without any structural data.
+              </p>
+              <p style={{ margin: "0 0 10px" }}>
+                The <strong>PROSITE database</strong> catalogs thousands of these patterns. Each entry has been experimentally 
+                validated: the pattern was derived by aligning known members of a protein family and identifying conserved 
+                positions. The notation (e.g., <code style={{ background: "#F1F5F9", padding: "1px 4px", borderRadius: 3, fontSize: 12 }}>N-{"{P}"}-[ST]-{"{P}"}</code>) compactly 
+                encodes which residues are allowed at each position.
+              </p>
+              <p style={{ margin: 0 }}>
+                In DNA, motifs identify <strong>regulatory elements</strong> (promoters, enhancers, ribosome binding sites) 
+                and <strong>restriction enzyme sites</strong> used in molecular cloning. Try the BRCA1 promoter example 
+                with restriction sites enabled to see how many cutting opportunities exist in a single promoter region.
+              </p>
+            </div>
+          </div>
+    
+          <div style={{ textAlign: "center", marginTop: 16, fontSize: 11, color: "#94A3B8" }}>
+            BSB511 / BENG451 — Bioinformatics Fundamentals — Sequence Motif Finder
+          </div>
+        </div>
+      );
+    }
+    
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
