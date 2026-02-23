@@ -1,0 +1,1034 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sanger Sequencing Simulator — BSB511 / BENG451</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; }
+    .back-link {
+      position: fixed; top: 12px; left: 12px; z-index: 1000;
+      padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 700;
+      background: rgba(15,23,42,0.85); color: #94A3B8; text-decoration: none;
+      border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(8px);
+      font-family: 'Inter', sans-serif; transition: all 0.2s;
+    }
+    .back-link:hover { color: #E2E8F0; border-color: rgba(255,255,255,0.3); }
+  </style>
+</head>
+<body>
+  <a class="back-link" href="index.html">← All Widgets</a>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useMemo, useCallback, useRef, useEffect } = React;
+
+    /* ─── Constants ─── */
+    const BASE_COLORS = { A: "#22C55E", T: "#EF4444", G: "#3B82F6", C: "#F59E0B" };
+    const BASE_COLORS_LIGHT = { A: "#DCFCE7", T: "#FEE2E2", G: "#DBEAFE", C: "#FEF3C7" };
+    const COMPLEMENT = { A: "T", T: "A", G: "C", C: "G" };
+
+    const EXAMPLES = {
+      "Short (12 bp)": "ATGCTAGCATGC",
+      "Primer region (20 bp)": "ATGCGTACCTGAATCGTTAG",
+      "Medium (30 bp)": "ATGAAAGCATTGCGTACCTGAATCGTTAGC",
+      "Custom": ""
+    };
+
+    /* ─── Generate all Sanger fragments from a template ─── */
+    function generateFragments(template, primerLen) {
+      // The primer anneals to the 3' end of the template.
+      // DNA polymerase extends from the primer, incorporating dNTPs and occasionally ddNTPs.
+      // Each ddNTP incorporation terminates the chain at that position.
+      // The new strand is complementary to the template, read 5'→3'.
+
+      const newStrand = template.split("").map(b => COMPLEMENT[b] || "?");
+      const fragments = [];
+
+      // For each position after the primer, a fragment terminates there
+      for (let i = primerLen; i < template.length; i++) {
+        const terminatingBase = newStrand[i]; // the ddNTP that caused termination
+        const fragmentSeq = newStrand.slice(primerLen, i + 1).join("");
+        fragments.push({
+          length: i - primerLen + 1,
+          position: i,
+          terminatingBase,
+          sequence: fragmentSeq,
+          tube: terminatingBase // which reaction tube this fragment comes from
+        });
+      }
+
+      return { fragments, newStrand: newStrand.join("") };
+    }
+
+    /* ─── Gel Electrophoresis View ─── */
+    function GelView({ fragments, template, primerLen, revealedCount, onBandClick, selectedBand }) {
+      const maxLen = fragments.length > 0 ? Math.max(...fragments.map(f => f.length)) : 1;
+      const gelHeight = 500;
+      const laneWidth = 80;
+      const headerH = 40;
+      const bottomPad = 40;
+      const usableH = gelHeight - headerH - bottomPad;
+
+      const bases = ["A", "T", "G", "C"];
+      const lanes = {};
+      bases.forEach(b => { lanes[b] = fragments.filter(f => f.tube === b); });
+
+      // Combined lane (modern single-lane 4-color)
+      const allSorted = [...fragments].sort((a, b) => a.length - b.length);
+
+      const yForLength = (len) => headerH + (len / (maxLen + 1)) * usableH;
+
+      return (
+        <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
+          {/* Classic 4-lane gel */}
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBottom: 6, textAlign: "center" }}>
+              CLASSIC 4-LANE GEL
+            </div>
+            <svg width={bases.length * laneWidth + 60} height={gelHeight} style={{ display: "block" }}>
+              {/* Gel background */}
+              <defs>
+                <linearGradient id="gelBg" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#1E293B" />
+                  <stop offset="100%" stopColor="#0F172A" />
+                </linearGradient>
+              </defs>
+              <rect x={40} y={0} width={bases.length * laneWidth} height={gelHeight} rx={8} fill="url(#gelBg)" />
+
+              {/* Lane labels */}
+              {bases.map((b, li) => (
+                <g key={b}>
+                  <text
+                    x={40 + li * laneWidth + laneWidth / 2}
+                    y={24}
+                    textAnchor="middle"
+                    fontSize={14}
+                    fontWeight={800}
+                    fontFamily="monospace"
+                    fill={BASE_COLORS[b]}
+                  >
+                    dd{b}TP
+                  </text>
+                  {/* Lane dividers */}
+                  {li > 0 && (
+                    <line
+                      x1={40 + li * laneWidth} y1={headerH}
+                      x2={40 + li * laneWidth} y2={gelHeight - 10}
+                      stroke="#334155" strokeWidth={1} strokeDasharray="3,3"
+                    />
+                  )}
+                  {/* Bands */}
+                  {lanes[b].map((frag, fi) => {
+                    const y = yForLength(frag.length);
+                    const isRevealed = revealedCount > 0 && frag.length <= revealedCount;
+                    const isSelected = selectedBand && selectedBand.length === frag.length;
+                    return (
+                      <g key={fi}
+                        onClick={() => onBandClick(frag)}
+                        style={{ cursor: "pointer" }}
+                      >
+                        <rect
+                          x={40 + li * laneWidth + 10}
+                          y={y - 3}
+                          width={laneWidth - 20}
+                          height={6}
+                          rx={3}
+                          fill={isSelected ? "#FFFFFF" : BASE_COLORS[b]}
+                          opacity={isSelected ? 1 : 0.85}
+                          stroke={isSelected ? "#FFFFFF" : "none"}
+                          strokeWidth={2}
+                        />
+                        {/* Size label on hover area */}
+                        {isRevealed && (
+                          <text
+                            x={40 + li * laneWidth + laneWidth / 2}
+                            y={y + 14}
+                            textAnchor="middle"
+                            fontSize={9}
+                            fill="#94A3B8"
+                            fontFamily="monospace"
+                          >
+                            {frag.length}
+                          </text>
+                        )}
+                      </g>
+                    );
+                  })}
+                </g>
+              ))}
+
+              {/* Arrow: short fragments migrate further */}
+              <text x={16} y={headerH + 10} fontSize={9} fill="#64748B" textAnchor="middle">−</text>
+              <line x1={16} y1={headerH + 16} x2={16} y2={gelHeight - bottomPad} stroke="#475569" strokeWidth={1.5} markerEnd="url(#arrowhead)" />
+              <text x={16} y={gelHeight - bottomPad + 14} fontSize={9} fill="#64748B" textAnchor="middle">+</text>
+              <defs>
+                <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                  <polygon points="0 0, 8 3, 0 6" fill="#475569" />
+                </marker>
+              </defs>
+            </svg>
+            <div style={{ fontSize: 10, color: "#64748B", textAlign: "center", marginTop: 4 }}>
+              ← shorter fragments (faster) — longer fragments (slower) →<br/>
+              Click any band to inspect it
+            </div>
+          </div>
+
+          {/* Read-off panel */}
+          <div style={{ minWidth: 200 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBottom: 6 }}>
+              READING THE GEL (bottom → top)
+            </div>
+            <div style={{
+              background: "#F8FAFC", borderRadius: 8, padding: 12, maxHeight: gelHeight,
+              overflowY: "auto"
+            }}>
+              {allSorted.map((frag, i) => {
+                const isRevealed = i < revealedCount;
+                const isSelected = selectedBand && selectedBand.length === frag.length;
+                return (
+                  <div
+                    key={i}
+                    onClick={() => onBandClick(frag)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "4px 8px", borderRadius: 6, cursor: "pointer",
+                      background: isSelected ? BASE_COLORS_LIGHT[frag.terminatingBase] : "transparent",
+                      border: isSelected ? `2px solid ${BASE_COLORS[frag.terminatingBase]}` : "2px solid transparent",
+                      marginBottom: 2, transition: "all 0.15s"
+                    }}
+                  >
+                    <span style={{
+                      fontFamily: "monospace", fontSize: 11, color: "#94A3B8",
+                      width: 24, textAlign: "right", flexShrink: 0
+                    }}>
+                      {frag.length}
+                    </span>
+                    {isRevealed ? (
+                      <span style={{
+                        fontFamily: "monospace", fontSize: 16, fontWeight: 800,
+                        color: BASE_COLORS[frag.terminatingBase]
+                      }}>
+                        {frag.terminatingBase}
+                      </span>
+                    ) : (
+                      <span style={{
+                        fontFamily: "monospace", fontSize: 16, fontWeight: 800,
+                        color: "#CBD5E1"
+                      }}>
+                        ?
+                      </span>
+                    )}
+                    {isRevealed && (
+                      <span style={{ fontSize: 10, color: "#94A3B8" }}>
+                        (dd{frag.terminatingBase}TP lane)
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {revealedCount > 0 && (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBottom: 4 }}>
+                  SEQUENCE READ SO FAR
+                </div>
+                <div style={{
+                  fontFamily: "monospace", fontSize: 14, fontWeight: 700, letterSpacing: 1,
+                  padding: "8px 12px", background: "#F8FAFC", borderRadius: 8,
+                  lineHeight: 1.8, wordBreak: "break-all"
+                }}>
+                  {allSorted.slice(0, revealedCount).map((frag, i) => (
+                    <span key={i} style={{ color: BASE_COLORS[frag.terminatingBase] }}>
+                      {frag.terminatingBase}
+                    </span>
+                  ))}
+                  {revealedCount < allSorted.length && (
+                    <span style={{ color: "#CBD5E1" }}>{"?".repeat(Math.min(5, allSorted.length - revealedCount))}</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    /* ─── Chromatogram View ─── */
+    function ChromatogramView({ fragments }) {
+      const sorted = [...fragments].sort((a, b) => a.length - b.length);
+      const n = sorted.length;
+      if (n === 0) return null;
+
+      const svgW = Math.max(600, n * 28 + 80);
+      const svgH = 200;
+      const marginL = 40;
+      const marginR = 40;
+      const plotW = svgW - marginL - marginR;
+      const peakH = 120;
+      const baselineY = 170;
+
+      const spacing = plotW / n;
+
+      // Generate smooth peaks using simple gaussian-like curves
+      const makePeakPath = (centerX, height, color) => {
+        const w = spacing * 0.7;
+        const points = [];
+        for (let dx = -w; dx <= w; dx += 1) {
+          const t = dx / (w * 0.4);
+          const y = baselineY - height * Math.exp(-t * t / 2);
+          points.push(`${centerX + dx},${y.toFixed(1)}`);
+        }
+        return points.join(" ");
+      };
+
+      return (
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBottom: 6 }}>
+            CAPILLARY ELECTROPHORESIS CHROMATOGRAM
+          </div>
+          <div style={{ overflowX: "auto", background: "white", borderRadius: 8, border: "1px solid #E2E8F0" }}>
+            <svg width={svgW} height={svgH} style={{ display: "block" }}>
+              {/* Baseline */}
+              <line x1={marginL} y1={baselineY} x2={svgW - marginR} y2={baselineY} stroke="#E2E8F0" strokeWidth={1} />
+
+              {/* Peaks */}
+              {sorted.map((frag, i) => {
+                const cx = marginL + (i + 0.5) * spacing;
+                const height = peakH * (0.6 + 0.4 * Math.sin(i * 0.7 + frag.length * 0.3)); // vary heights slightly
+                const color = BASE_COLORS[frag.terminatingBase];
+                const points = makePeakPath(cx, height, color);
+
+                return (
+                  <g key={i}>
+                    <polyline
+                      points={points}
+                      fill="none"
+                      stroke={color}
+                      strokeWidth={2}
+                      opacity={0.9}
+                    />
+                    {/* Filled area under curve */}
+                    <polyline
+                      points={`${cx - spacing * 0.7},${baselineY} ${points} ${cx + spacing * 0.7},${baselineY}`}
+                      fill={color}
+                      opacity={0.1}
+                    />
+                    {/* Base label */}
+                    <text
+                      x={cx} y={baselineY + 16}
+                      textAnchor="middle"
+                      fontSize={13}
+                      fontWeight={800}
+                      fontFamily="monospace"
+                      fill={color}
+                    >
+                      {frag.terminatingBase}
+                    </text>
+                    {/* Position number */}
+                    <text
+                      x={cx} y={baselineY + 28}
+                      textAnchor="middle"
+                      fontSize={8}
+                      fill="#94A3B8"
+                      fontFamily="monospace"
+                    >
+                      {frag.length}
+                    </text>
+                  </g>
+                );
+              })}
+
+              {/* Axis labels */}
+              <text x={marginL - 4} y={baselineY + 4} textAnchor="end" fontSize={10} fill="#64748B">0</text>
+              <text x={svgW / 2} y={12} textAnchor="middle" fontSize={10} fill="#94A3B8">
+                Fragment size →
+              </text>
+              <text x={8} y={svgH / 2} textAnchor="middle" fontSize={10} fill="#94A3B8"
+                transform={`rotate(-90, 8, ${svgH / 2})`}>
+                Fluorescence
+              </text>
+            </svg>
+          </div>
+          <div style={{ fontSize: 10, color: "#64748B", marginTop: 4 }}>
+            Each peak represents a fluorescently-labeled fragment detected by laser. Color = terminating ddNTP.
+            In modern sequencers, all four reactions run in a single capillary with different fluorescent dyes.
+          </div>
+        </div>
+      );
+    }
+
+    /* ─── Fragment Detail Panel ─── */
+    function FragmentDetail({ fragment, template, primerLen }) {
+      if (!fragment) return null;
+      const newStrand = template.split("").map(b => COMPLEMENT[b]);
+      const fragBases = newStrand.slice(primerLen, fragment.position + 1);
+
+      return (
+        <div style={{
+          background: BASE_COLORS_LIGHT[fragment.terminatingBase],
+          border: `2px solid ${BASE_COLORS[fragment.terminatingBase]}`,
+          borderRadius: 10, padding: 16, marginTop: 12
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1E293B", marginBottom: 8 }}>
+            Fragment Detail — Length: {fragment.length} nt
+          </div>
+
+          <div style={{ fontFamily: "monospace", fontSize: 13, lineHeight: 2.2 }}>
+            {/* Template strand */}
+            <div>
+              <span style={{ fontSize: 10, color: "#64748B", marginRight: 4 }}>Template 3′</span>
+              {template.split("").map((b, i) => {
+                const inPrimer = i < primerLen;
+                const inFragment = i >= primerLen && i <= fragment.position;
+                const isTerminal = i === fragment.position;
+                return (
+                  <span key={i} style={{
+                    color: inPrimer ? "#94A3B8" : inFragment ? "#334155" : "#CBD5E1",
+                    fontWeight: isTerminal ? 800 : inFragment ? 600 : 400,
+                    background: isTerminal ? BASE_COLORS_LIGHT[fragment.terminatingBase] : "transparent",
+                    borderRadius: isTerminal ? 3 : 0,
+                    padding: isTerminal ? "0 2px" : 0
+                  }}>{b}</span>
+                );
+              })}
+              <span style={{ fontSize: 10, color: "#64748B", marginLeft: 4 }}>5′</span>
+            </div>
+
+            {/* Base pairing indicators */}
+            <div style={{ color: "#CBD5E1", letterSpacing: 0.5 }}>
+              {template.split("").map((_, i) => {
+                const inPrimer = i < primerLen;
+                const inFragment = i >= primerLen && i <= fragment.position;
+                return <span key={i}>{inPrimer ? "│" : inFragment ? "│" : " "}</span>;
+              })}
+            </div>
+
+            {/* New strand */}
+            <div>
+              <span style={{ fontSize: 10, color: "#64748B", marginRight: 4 }}>New     5′</span>
+              {newStrand.map((b, i) => {
+                const inPrimer = i < primerLen;
+                const inFragment = i >= primerLen && i <= fragment.position;
+                const isTerminal = i === fragment.position;
+                if (!inPrimer && !inFragment) return <span key={i} style={{ color: "transparent" }}>·</span>;
+                return (
+                  <span key={i} style={{
+                    color: inPrimer ? "#94A3B8" : isTerminal ? BASE_COLORS[b] : "#334155",
+                    fontWeight: isTerminal ? 800 : inPrimer ? 400 : 600,
+                    textDecoration: isTerminal ? "underline" : "none",
+                    textDecorationColor: BASE_COLORS[b]
+                  }}>
+                    {inPrimer ? "=" : b}
+                  </span>
+                );
+              })}
+              <span style={{ fontSize: 10, marginLeft: 4 }}>
+                <span style={{ color: "#EF4444", fontWeight: 700 }}>✕</span>
+                <span style={{ color: "#64748B" }}> terminated by </span>
+                <span style={{ color: BASE_COLORS[fragment.terminatingBase], fontWeight: 800 }}>
+                  dd{fragment.terminatingBase}TP
+                </span>
+              </span>
+            </div>
+          </div>
+
+          <div style={{ fontSize: 11, color: "#64748B", marginTop: 10, lineHeight: 1.6 }}>
+            DNA polymerase extended {fragment.length} bases from the primer, then incorporated
+            <strong style={{ color: BASE_COLORS[fragment.terminatingBase] }}> dd{fragment.terminatingBase}TP </strong>
+            (missing the 3′-OH group) instead of the normal d{fragment.terminatingBase}TP.
+            Without the 3′-OH, no further nucleotide can be added → chain terminates.
+          </div>
+        </div>
+      );
+    }
+
+    /* ─── Step-by-step walkthrough ─── */
+    const WALKTHROUGH_STEPS = [
+      {
+        title: "1. Prepare the Reaction",
+        content: "We start with four identical reaction tubes. Each contains: the single-stranded DNA template, a short primer, DNA polymerase, all four normal dNTPs (dATP, dTTP, dGTP, dCTP), and a small amount of ONE type of dideoxynucleotide (ddNTP).",
+        highlight: "setup"
+      },
+      {
+        title: "2. ddNTPs — The Key Trick",
+        content: "Dideoxynucleotides (ddNTPs) lack the 3′-OH group that is essential for forming the phosphodiester bond with the next nucleotide. When DNA polymerase incorporates a ddNTP instead of a normal dNTP, the chain cannot be extended further — it terminates at that position.",
+        highlight: "ddntp"
+      },
+      {
+        title: "3. Random Termination",
+        content: "Because each tube has a MIX of normal dNTPs and a small amount of one ddNTP, termination is random. Some chains terminate early, some late. This produces fragments of EVERY possible length, each ending with the specific ddNTP in that tube.",
+        highlight: "fragments"
+      },
+      {
+        title: "4. Gel Electrophoresis",
+        content: "All four reactions are loaded into adjacent lanes of a polyacrylamide gel. An electric field pulls the negatively-charged DNA fragments toward the positive electrode. Shorter fragments migrate faster (less friction). This separates fragments by size with single-nucleotide resolution.",
+        highlight: "gel"
+      },
+      {
+        title: "5. Reading the Sequence",
+        content: "Read the gel from BOTTOM to TOP (smallest to largest fragment). Each band tells you which ddNTP terminated that fragment — and therefore which base is at that position in the new strand. Reading bottom-to-top gives the sequence in the 5′→3′ direction.",
+        highlight: "read"
+      },
+      {
+        title: "6. Modern Automation",
+        content: "Today, all four ddNTPs carry different fluorescent dyes (colors). The reaction runs in a single capillary tube, and a laser detector reads the color of each fragment as it passes. The output is a chromatogram — the colored peaks you see in the bottom panel.",
+        highlight: "chromatogram"
+      }
+    ];
+
+    /* ─── Molecule diagram ─── */
+    function DdNTPDiagram() {
+      return (
+        <div style={{
+          display: "flex", gap: 20, justifyContent: "center", flexWrap: "wrap",
+          marginTop: 12
+        }}>
+          {/* Normal dNTP */}
+          <div style={{
+            background: "#ECFDF5", border: "2px solid #A7F3D0", borderRadius: 10,
+            padding: 14, textAlign: "center", width: 180
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#059669", marginBottom: 6 }}>Normal dNTP</div>
+            <div style={{ fontFamily: "monospace", fontSize: 11, lineHeight: 2, color: "#334155" }}>
+              <div>5′ — <span style={{ color: "#059669", fontWeight: 700 }}>Base</span></div>
+              <div style={{ marginLeft: 20 }}>|</div>
+              <div>Sugar (deoxyribose)</div>
+              <div style={{ marginLeft: 20 }}>|</div>
+              <div>3′ — <span style={{ background: "#D1FAE5", padding: "2px 6px", borderRadius: 4, fontWeight: 800, color: "#059669" }}>OH</span> ✓</div>
+            </div>
+            <div style={{ fontSize: 10, color: "#059669", marginTop: 6, fontWeight: 600 }}>
+              Can form next bond → chain continues
+            </div>
+          </div>
+
+          {/* ddNTP */}
+          <div style={{
+            background: "#FEF2F2", border: "2px solid #FECACA", borderRadius: 10,
+            padding: 14, textAlign: "center", width: 180
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#DC2626", marginBottom: 6 }}>Dideoxy ddNTP</div>
+            <div style={{ fontFamily: "monospace", fontSize: 11, lineHeight: 2, color: "#334155" }}>
+              <div>5′ — <span style={{ color: "#DC2626", fontWeight: 700 }}>Base</span></div>
+              <div style={{ marginLeft: 20 }}>|</div>
+              <div>Sugar (dideoxyribose)</div>
+              <div style={{ marginLeft: 20 }}>|</div>
+              <div>3′ — <span style={{ background: "#FEE2E2", padding: "2px 6px", borderRadius: 4, fontWeight: 800, color: "#DC2626" }}>H</span> ✕</div>
+            </div>
+            <div style={{ fontSize: 10, color: "#DC2626", marginTop: 6, fontWeight: 600 }}>
+              Missing 3′-OH → chain TERMINATES
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ─── Four Tubes Diagram ─── */
+    function TubesDiagram({ template, primerLen }) {
+      const bases = ["A", "T", "G", "C"];
+      const newStrand = template.split("").map(b => COMPLEMENT[b]);
+      return (
+        <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap", marginTop: 12 }}>
+          {bases.map(b => {
+            // Count how many fragments end with this base
+            const count = newStrand.slice(primerLen).filter(nb => nb === b).length;
+            return (
+              <div key={b} style={{
+                background: BASE_COLORS_LIGHT[b], border: `2px solid ${BASE_COLORS[b]}`,
+                borderRadius: 12, padding: "12px 16px", textAlign: "center", width: 130
+              }}>
+                <div style={{
+                  fontSize: 18, fontWeight: 800, color: BASE_COLORS[b], fontFamily: "monospace"
+                }}>
+                  dd{b}TP
+                </div>
+                <div style={{ fontSize: 11, color: "#64748B", marginTop: 4 }}>
+                  tube contains:
+                </div>
+                <div style={{ fontSize: 10, color: "#475569", marginTop: 4, lineHeight: 1.6, textAlign: "left" }}>
+                  • Template DNA<br/>
+                  • Primer<br/>
+                  • DNA polymerase<br/>
+                  • All 4 dNTPs<br/>
+                  • + small amount of <span style={{ fontWeight: 700, color: BASE_COLORS[b] }}>dd{b}TP</span>
+                </div>
+                <div style={{
+                  marginTop: 8, fontSize: 12, fontWeight: 700, color: BASE_COLORS[b],
+                  background: "rgba(255,255,255,0.7)", borderRadius: 6, padding: "3px 0"
+                }}>
+                  → {count} fragment{count !== 1 ? "s" : ""}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    /* ─── Main Component ─── */
+    const App = function SangerSequencing() {
+      const [selectedExample, setSelectedExample] = useState("Short (12 bp)");
+      const [templateInput, setTemplateInput] = useState(EXAMPLES["Short (12 bp)"]);
+      const [primerLen, setPrimerLen] = useState(3);
+      const [view, setView] = useState("walkthrough"); // walkthrough, interactive, chromatogram
+      const [walkthroughStep, setWalkthroughStep] = useState(0);
+      const [revealedCount, setRevealedCount] = useState(0);
+      const [selectedBand, setSelectedBand] = useState(null);
+      const [showAnswer, setShowAnswer] = useState(false);
+
+      const template = useMemo(() =>
+        templateInput.toUpperCase().replace(/[^ATGC]/g, ""),
+        [templateInput]
+      );
+
+      const { fragments, newStrand } = useMemo(() => {
+        if (template.length <= primerLen) return { fragments: [], newStrand: "" };
+        return generateFragments(template, primerLen);
+      }, [template, primerLen]);
+
+      const sortedFragments = useMemo(() =>
+        [...fragments].sort((a, b) => a.length - b.length),
+        [fragments]
+      );
+
+      const readSequence = sortedFragments.map(f => f.terminatingBase).join("");
+
+      const handleBandClick = useCallback((frag) => {
+        setSelectedBand(prev => prev && prev.length === frag.length ? null : frag);
+      }, []);
+
+      const revealNext = () => setRevealedCount(prev => Math.min(prev + 1, fragments.length));
+      const revealAll = () => setRevealedCount(fragments.length);
+      const resetReveal = () => { setRevealedCount(0); setSelectedBand(null); setShowAnswer(false); };
+
+      return (
+        <div style={{
+          fontFamily: "'Inter', -apple-system, sans-serif",
+          maxWidth: 960, margin: "0 auto", padding: 20,
+          background: "linear-gradient(135deg, #F0FDFA 0%, #EFF6FF 100%)",
+          minHeight: "100vh"
+        }}>
+          {/* Header */}
+          <div style={{ textAlign: "center", marginBottom: 20 }}>
+            <h1 style={{ fontSize: 24, fontWeight: 800, color: "#0F172A", margin: 0 }}>
+              🧪 Sanger Sequencing Simulator
+            </h1>
+            <p style={{ fontSize: 13, color: "#64748B", margin: "6px 0 0" }}>
+              Chain termination method step by step — BSB511 / BENG451
+            </p>
+          </div>
+
+          {/* Input Panel */}
+          <div style={{
+            background: "white", borderRadius: 12, padding: 20, marginBottom: 16,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+              <label style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>
+                Template Strand (3′ → 5′)
+              </label>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                {Object.keys(EXAMPLES).map(name => (
+                  <button key={name} onClick={() => {
+                    setSelectedExample(name);
+                    if (name !== "Custom") {
+                      setTemplateInput(EXAMPLES[name]);
+                      setPrimerLen(Math.min(3, EXAMPLES[name].length - 1));
+                    }
+                    resetReveal();
+                  }} style={{
+                    padding: "4px 10px", fontSize: 11, borderRadius: 6, cursor: "pointer",
+                    border: selectedExample === name ? "2px solid #0D9488" : "1px solid #E2E8F0",
+                    background: selectedExample === name ? "#F0FDFA" : "white",
+                    color: selectedExample === name ? "#0F766E" : "#64748B", fontWeight: 600
+                  }}>{name}</button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+              <div style={{ flex: "1 1 300px" }}>
+                <input
+                  value={templateInput}
+                  onChange={e => { setTemplateInput(e.target.value); setSelectedExample("Custom"); resetReveal(); }}
+                  spellCheck={false}
+                  placeholder="Enter template DNA (A, T, G, C)..."
+                  style={{
+                    width: "100%", padding: "10px 12px", fontFamily: "monospace", fontSize: 15,
+                    border: "2px solid #E2E8F0", borderRadius: 8, outline: "none",
+                    fontWeight: 700, letterSpacing: 2, color: "#1E293B", boxSizing: "border-box"
+                  }}
+                />
+              </div>
+              <div style={{ width: 100 }}>
+                <label style={{ fontSize: 10, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>PRIMER (bp)</label>
+                <input
+                  type="number" min={1} max={Math.max(1, template.length - 2)}
+                  value={primerLen}
+                  onChange={e => { setPrimerLen(Math.max(1, Math.min(parseInt(e.target.value) || 1, template.length - 2))); resetReveal(); }}
+                  style={{
+                    width: "100%", padding: "10px 8px", fontSize: 14, border: "2px solid #E2E8F0",
+                    borderRadius: 8, outline: "none", textAlign: "center", fontWeight: 700,
+                    boxSizing: "border-box", color: "#1E293B"
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Sequence display */}
+            {template.length > 0 && (
+              <div style={{
+                marginTop: 12, background: "#F8FAFC", borderRadius: 8, padding: 12,
+                fontFamily: "monospace", fontSize: 13, lineHeight: 2, overflowX: "auto"
+              }}>
+                <div>
+                  <span style={{ fontSize: 10, color: "#64748B" }}>Template 3′ </span>
+                  {template.split("").map((b, i) => (
+                    <span key={i} style={{
+                      color: i < primerLen ? "#94A3B8" : BASE_COLORS[b],
+                      fontWeight: i < primerLen ? 400 : 700,
+                      textDecoration: i < primerLen ? "none" : "none"
+                    }}>{b}</span>
+                  ))}
+                  <span style={{ fontSize: 10, color: "#64748B" }}> 5′</span>
+                </div>
+                <div>
+                  <span style={{ fontSize: 10, color: "#64748B" }}>Primer   5′ </span>
+                  {template.split("").map((b, i) => (
+                    <span key={i} style={{
+                      color: i < primerLen ? "#0D9488" : "transparent",
+                      fontWeight: i < primerLen ? 700 : 400
+                    }}>{i < primerLen ? COMPLEMENT[b] : "·"}</span>
+                  ))}
+                  <span style={{ fontSize: 10, color: "#64748B" }}> 3′</span>
+                  <span style={{ fontSize: 10, color: "#0D9488", marginLeft: 8 }}>
+                    ← primer ({primerLen} bp)
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: "#64748B", marginTop: 6 }}>
+                  {template.length} bp template → {fragments.length} possible termination positions → {fragments.length} fragments
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* View Tabs */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
+            {[
+              ["walkthrough", "📖 How It Works"],
+              ["interactive", "🧪 Interactive Gel"],
+              ["chromatogram", "📊 Chromatogram"]
+            ].map(([id, label]) => (
+              <button key={id} onClick={() => setView(id)} style={{
+                padding: "10px 18px", fontSize: 13, fontWeight: 600,
+                borderRadius: "10px 10px 0 0", cursor: "pointer", border: "none",
+                background: view === id ? "white" : "rgba(255,255,255,0.5)",
+                color: view === id ? "#0F766E" : "#64748B",
+                boxShadow: view === id ? "0 1px 3px rgba(0,0,0,0.08)" : "none"
+              }}>{label}</button>
+            ))}
+          </div>
+
+          {/* View Content */}
+          <div style={{
+            background: "white", borderRadius: "0 12px 12px 12px", padding: 24,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.08)", minHeight: 400
+          }}>
+            {/* ─── WALKTHROUGH VIEW ─── */}
+            {view === "walkthrough" && (
+              <div>
+                {/* Step navigation */}
+                <div style={{ display: "flex", gap: 4, marginBottom: 16, flexWrap: "wrap" }}>
+                  {WALKTHROUGH_STEPS.map((s, i) => (
+                    <button key={i} onClick={() => setWalkthroughStep(i)} style={{
+                      padding: "6px 12px", fontSize: 11, fontWeight: 600, borderRadius: 6,
+                      cursor: "pointer", border: "none",
+                      background: walkthroughStep === i ? "#0D9488" : "#F1F5F9",
+                      color: walkthroughStep === i ? "white" : "#64748B",
+                      transition: "all 0.15s"
+                    }}>
+                      {i + 1}
+                    </button>
+                  ))}
+                  <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+                    <button onClick={() => setWalkthroughStep(Math.max(0, walkthroughStep - 1))}
+                      disabled={walkthroughStep === 0}
+                      style={{
+                        padding: "6px 14px", fontSize: 12, fontWeight: 700, borderRadius: 6,
+                        border: "1px solid #E2E8F0", background: "white", cursor: walkthroughStep === 0 ? "default" : "pointer",
+                        color: walkthroughStep === 0 ? "#CBD5E1" : "#64748B"
+                      }}>◀</button>
+                    <button onClick={() => setWalkthroughStep(Math.min(WALKTHROUGH_STEPS.length - 1, walkthroughStep + 1))}
+                      disabled={walkthroughStep === WALKTHROUGH_STEPS.length - 1}
+                      style={{
+                        padding: "6px 14px", fontSize: 12, fontWeight: 700, borderRadius: 6,
+                        border: "none", background: walkthroughStep === WALKTHROUGH_STEPS.length - 1 ? "#CBD5E1" : "#0D9488",
+                        color: "white", cursor: walkthroughStep === WALKTHROUGH_STEPS.length - 1 ? "default" : "pointer"
+                      }}>▶</button>
+                  </div>
+                </div>
+
+                {/* Step content */}
+                <div style={{
+                  background: "#F0FDFA", borderRadius: 10, padding: 20, marginBottom: 16,
+                  border: "1px solid #CCFBF1"
+                }}>
+                  <h3 style={{ fontSize: 16, fontWeight: 700, color: "#0F766E", marginTop: 0, marginBottom: 8 }}>
+                    {WALKTHROUGH_STEPS[walkthroughStep].title}
+                  </h3>
+                  <p style={{ fontSize: 14, color: "#334155", lineHeight: 1.8, margin: 0 }}>
+                    {WALKTHROUGH_STEPS[walkthroughStep].content}
+                  </p>
+                </div>
+
+                {/* Contextual diagrams */}
+                {WALKTHROUGH_STEPS[walkthroughStep].highlight === "setup" && template.length > primerLen && (
+                  <TubesDiagram template={template} primerLen={primerLen} />
+                )}
+
+                {WALKTHROUGH_STEPS[walkthroughStep].highlight === "ddntp" && (
+                  <DdNTPDiagram />
+                )}
+
+                {WALKTHROUGH_STEPS[walkthroughStep].highlight === "fragments" && fragments.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBottom: 8 }}>
+                      ALL {fragments.length} FRAGMENTS GENERATED
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                      {sortedFragments.map((f, i) => (
+                        <div key={i} style={{
+                          padding: "4px 8px", borderRadius: 6, fontFamily: "monospace", fontSize: 11,
+                          background: BASE_COLORS_LIGHT[f.terminatingBase],
+                          color: BASE_COLORS[f.terminatingBase],
+                          border: `1px solid ${BASE_COLORS[f.terminatingBase]}40`,
+                          fontWeight: 700
+                        }}>
+                          {f.sequence}<span style={{ opacity: 0.5 }}>|</span> ({f.length} nt, dd{f.terminatingBase}TP tube)
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {(WALKTHROUGH_STEPS[walkthroughStep].highlight === "gel" ||
+                  WALKTHROUGH_STEPS[walkthroughStep].highlight === "read") && fragments.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <GelView
+                      fragments={fragments}
+                      template={template}
+                      primerLen={primerLen}
+                      revealedCount={WALKTHROUGH_STEPS[walkthroughStep].highlight === "read" ? fragments.length : 0}
+                      onBandClick={handleBandClick}
+                      selectedBand={selectedBand}
+                    />
+                  </div>
+                )}
+
+                {WALKTHROUGH_STEPS[walkthroughStep].highlight === "chromatogram" && fragments.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <ChromatogramView fragments={fragments} />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ─── INTERACTIVE GEL VIEW ─── */}
+            {view === "interactive" && (
+              <div>
+                <div style={{
+                  display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap"
+                }}>
+                  <button onClick={revealNext} disabled={revealedCount >= fragments.length} style={{
+                    padding: "8px 16px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                    border: "none",
+                    background: revealedCount >= fragments.length ? "#CBD5E1" : "#0D9488",
+                    color: "white",
+                    cursor: revealedCount >= fragments.length ? "default" : "pointer"
+                  }}>
+                    Read Next Base ▶
+                  </button>
+                  <button onClick={revealAll} style={{
+                    padding: "8px 16px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                    border: "2px solid #E2E8F0", background: "white", color: "#64748B", cursor: "pointer"
+                  }}>Reveal All</button>
+                  <button onClick={resetReveal} style={{
+                    padding: "8px 16px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                    border: "2px solid #FCA5A5", background: "white", color: "#DC2626", cursor: "pointer"
+                  }}>↺ Reset</button>
+                  <span style={{ fontSize: 12, color: "#64748B", marginLeft: 8 }}>
+                    {revealedCount} / {fragments.length} bases read
+                  </span>
+                  <button onClick={() => setShowAnswer(!showAnswer)} style={{
+                    marginLeft: "auto", padding: "8px 16px", fontSize: 12, fontWeight: 700, borderRadius: 8,
+                    border: "2px solid #E2E8F0",
+                    background: showAnswer ? "#FEF2F2" : "white",
+                    color: showAnswer ? "#DC2626" : "#64748B", cursor: "pointer"
+                  }}>{showAnswer ? "Hide" : "Show"} Full Answer</button>
+                </div>
+
+                {showAnswer && (
+                  <div style={{
+                    background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 8,
+                    padding: 12, marginBottom: 12
+                  }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", marginBottom: 4 }}>
+                      COMPLETE SEQUENCE (new strand, 5′→3′)
+                    </div>
+                    <div style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, letterSpacing: 1.5, lineHeight: 1.8 }}>
+                      {readSequence.split("").map((b, i) => (
+                        <span key={i} style={{ color: BASE_COLORS[b] }}>{b}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {fragments.length > 0 && (
+                  <GelView
+                    fragments={fragments}
+                    template={template}
+                    primerLen={primerLen}
+                    revealedCount={revealedCount}
+                    onBandClick={handleBandClick}
+                    selectedBand={selectedBand}
+                  />
+                )}
+
+                {selectedBand && (
+                  <FragmentDetail
+                    fragment={selectedBand}
+                    template={template}
+                    primerLen={primerLen}
+                  />
+                )}
+              </div>
+            )}
+
+            {/* ─── CHROMATOGRAM VIEW ─── */}
+            {view === "chromatogram" && (
+              <div>
+                {fragments.length > 0 ? (
+                  <>
+                    <ChromatogramView fragments={fragments} />
+
+                    <div style={{ marginTop: 16 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBottom: 6 }}>
+                        COMPLETE SEQUENCE READ (5′ → 3′)
+                      </div>
+                      <div style={{
+                        fontFamily: "monospace", fontSize: 16, fontWeight: 700, letterSpacing: 2,
+                        padding: "12px 16px", background: "#F8FAFC", borderRadius: 8,
+                        lineHeight: 2, wordBreak: "break-all"
+                      }}>
+                        {readSequence.split("").map((b, i) => (
+                          <span key={i} style={{ color: BASE_COLORS[b] }}>{b}</span>
+                        ))}
+                      </div>
+                      <div style={{ fontSize: 12, color: "#64748B", marginTop: 8 }}>
+                        {readSequence.length} bases read from {fragments.length} fragments
+                      </div>
+                    </div>
+
+                    {/* Comparison */}
+                    <div style={{
+                      marginTop: 16, background: "#F8FAFC", borderRadius: 10, padding: 16
+                    }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 8 }}>
+                        Verification: New strand vs. Template complement
+                      </div>
+                      <div style={{ fontFamily: "monospace", fontSize: 13, lineHeight: 2 }}>
+                        <div>
+                          <span style={{ color: "#64748B", fontSize: 11, marginRight: 8 }}>Template  3′</span>
+                          {template.split("").map((b, i) => (
+                            <span key={i} style={{
+                              color: i < primerLen ? "#94A3B8" : BASE_COLORS[b], fontWeight: 600
+                            }}>{b}</span>
+                          ))}
+                          <span style={{ color: "#64748B", fontSize: 11, marginLeft: 8 }}>5′</span>
+                        </div>
+                        <div>
+                          <span style={{ color: "#64748B", fontSize: 11, marginRight: 8 }}>New strand 5′</span>
+                          {template.split("").map((b, i) => {
+                            const comp = COMPLEMENT[b];
+                            return (
+                              <span key={i} style={{
+                                color: i < primerLen ? "#94A3B8" : BASE_COLORS[comp], fontWeight: 600
+                              }}>{i < primerLen ? "=" : comp}</span>
+                            );
+                          })}
+                          <span style={{ color: "#64748B", fontSize: 11, marginLeft: 8 }}>3′</span>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 11, color: "#64748B", marginTop: 8 }}>
+                        <span style={{ color: "#94A3B8" }}>= = =</span> = primer region (not sequenced) •
+                        The sequenced region starts after the primer and reads the complement of the template.
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ textAlign: "center", padding: 40, color: "#94A3B8" }}>
+                    Enter a template sequence longer than the primer to see the chromatogram.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Educational Panel */}
+          <div style={{
+            background: "white", borderRadius: 12, padding: 20, marginTop: 16,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+          }}>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1E293B", marginTop: 0, marginBottom: 10 }}>
+              Key Concepts
+            </h3>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 16, fontSize: 13, color: "#475569", lineHeight: 1.8 }}>
+              <div>
+                <div style={{ fontWeight: 700, color: "#0D9488", marginBottom: 4 }}>Chain Termination</div>
+                <p style={{ margin: 0 }}>
+                  Frederick Sanger developed this method in 1977, earning his second Nobel Prize.
+                  The key insight: dideoxynucleotides (ddNTPs) lack the 3′-OH group needed for
+                  chain elongation. When randomly incorporated, they produce fragments of every
+                  possible length — each ending at a known base.
+                </p>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, color: "#6366F1", marginBottom: 4 }}>Read Length & Limitations</div>
+                <p style={{ margin: 0 }}>
+                  Sanger sequencing typically reads 700–900 bases per run with very high accuracy
+                  (99.99%). It remains the gold standard for validating short sequences, plasmid
+                  verification, and clinical diagnostics. However, it is slow and expensive for
+                  whole genomes — that is where next-generation sequencing (NGS) takes over.
+                </p>
+              </div>
+            </div>
+            <div style={{
+              marginTop: 14, padding: "10px 14px", background: "#F0FDFA", borderRadius: 8,
+              fontSize: 12, color: "#134E4A", lineHeight: 1.6
+            }}>
+              💡 <strong>Historical note:</strong> The original method used radioactive labels and manual gel reading.
+              The automated version (Applied Biosystems, 1986) introduced fluorescent ddNTPs and capillary electrophoresis,
+              making it possible to sequence the entire human genome (2001–2003) using thousands of parallel Sanger reactions
+              in the "shotgun" approach.
+            </div>
+          </div>
+
+          <div style={{ textAlign: "center", marginTop: 16, fontSize: 11, color: "#94A3B8" }}>
+            BSB511 / BENG451 — Bioinformatics Fundamentals — Sanger Sequencing Simulator
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
