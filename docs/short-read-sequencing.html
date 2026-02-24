@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Short-Read Sequencing — BSB511 / BENG451</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Nunito+Sans:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; font-family: 'Nunito Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    h1, h2, h3, h4, h5, h6 { font-family: 'Nunito', system-ui, sans-serif; }
+    .back-link {
+      position: fixed; top: 12px; left: 12px; z-index: 1000;
+      padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 700;
+      background: white; color: #2a7f8a; text-decoration: none;
+      border: 1px solid #b8dce2; font-family: 'Nunito Sans', sans-serif; transition: all 0.2s ease-in-out;
+    }
+    .back-link:hover { background: #e8f4f6; color: #1e5f6a; border-color: #2a7f8a; }
+  </style>
+</head>
+<body>
+  <a href="index.html" class="back-link">← All Widgets</a>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useMemo, useCallback } = React;
+
+    /* ─── Constants ─────────────────────────────────────────────────────────── */
+    const BASE_COLORS  = { A: "#22C55E", T: "#EF4444", G: "#3B82F6", C: "#F59E0B" };
+    const BASE_BG      = { A: "#DCFCE7", T: "#FEE2E2", G: "#DBEAFE", C: "#FEF3C7" };
+    const COMPLEMENT   = { A: "T", T: "A", G: "C", C: "G" };
+
+    const PRESETS = [
+      { label: "Short (12 bp)",   seq: "ATGCTAGCATGC" },
+      { label: "Medium (18 bp)",  seq: "ATGCTAGCATGCGTACGT" },
+      { label: "GC-rich (15 bp)", seq: "GCGCATCGATCGGCGAT" },
+      { label: "AT-rich (15 bp)", seq: "ATAATAATCGATAAAAG" },
+    ];
+
+    /* ─── Seeded PRNG (for reproducible read generation) ─────────────────── */
+    function makePrng(seed) {
+      let s = seed >>> 0;
+      return () => { s = (Math.imul(1664525, s) + 1013904223) >>> 0; return s / 0xffffffff; };
+    }
+
+    /* ─── Generate simulated short reads from a reference ───────────────── */
+    function generateReads(ref, readLen, numReads) {
+      if (ref.length < readLen) return [];
+      const rng = makePrng(42);
+      const reads = [];
+      for (let i = 0; i < numReads; i++) {
+        const start = Math.floor(rng() * (ref.length - readLen + 1));
+        // Quality degrades slightly toward 3′ end (realistic Illumina profile)
+        const quals = Array.from({ length: readLen }, (_, j) => {
+          const base = 38 - Math.floor(j / readLen * 15);   // Q38 → Q23
+          return Math.max(10, base - Math.floor(rng() * 6)); // ±5 noise
+        });
+        const seq = ref.slice(start, start + readLen).split("").map((b, j) => {
+          const errRate = Math.pow(10, -quals[j] / 10);
+          if (rng() < errRate) {
+            const others = "ATGC".replace(b, "");
+            return others[Math.floor(rng() * 3)];
+          }
+          return b;
+        }).join("");
+        reads.push({ start, seq, quals, id: `read_${i + 1}` });
+      }
+      return reads.sort((a, b) => a.start - b.start);
+    }
+
+    /* ─── Pack reads into non-overlapping lanes ──────────────────────────── */
+    function assignLanes(reads) {
+      const laneEnds = [];
+      return reads.map(r => {
+        let lane = laneEnds.findIndex(e => e <= r.start);
+        if (lane === -1) { lane = laneEnds.length; laneEnds.push(0); }
+        laneEnds[lane] = r.start + r.seq.length;
+        return { ...r, lane };
+      });
+    }
+
+    /* ─── Coverage per position ──────────────────────────────────────────── */
+    function coverage(reads, refLen) {
+      const cov = Array(refLen).fill(0);
+      reads.forEach(r => {
+        for (let i = r.start; i < r.start + r.seq.length && i < refLen; i++) cov[i]++;
+      });
+      return cov;
+    }
+
+    /* ─── Consensus from reads ───────────────────────────────────────────── */
+    function consensus(reads, ref) {
+      return ref.split("").map((refBase, pos) => {
+        const counts = { A: 0, T: 0, G: 0, C: 0 };
+        reads.forEach(r => {
+          if (pos >= r.start && pos < r.start + r.seq.length) {
+            const b = r.seq[pos - r.start];
+            if (counts[b] !== undefined) counts[b]++;
+          }
+        });
+        const total = Object.values(counts).reduce((a, b) => a + b, 0);
+        if (total === 0) return { base: "N", match: false, depth: 0 };
+        const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+        return { base: best, match: best === refBase, depth: total };
+      });
+    }
+
+    /* ─── Phred quality to error probability ────────────────────────────── */
+    const qToProb = q => Math.pow(10, -q / 10);
+    const qToChar = q => String.fromCharCode(q + 33);
+
+    /* ═══════════════════ SBS CYCLE VISUALIZER ═══════════════════ */
+    function SBSPanel({ template }) {
+      const newStrand = template.split("").map(b => COMPLEMENT[b] || "?");
+      const [cycle, setCycle]     = useState(0);  // 0 = not started; 1..n = cycle number
+      const [subStep, setSubStep] = useState(0);  // 0=start, 1=add, 2=image, 3=cleave
+      const maxCycle = template.length;
+
+      const advance = () => {
+        if (subStep < 3) { setSubStep(s => s + 1); }
+        else if (cycle < maxCycle) { setCycle(c => c + 1); setSubStep(1); }
+      };
+      const back = () => {
+        if (subStep > 1) { setSubStep(s => s - 1); }
+        else if (cycle > 1) { setCycle(c => c - 1); setSubStep(3); }
+        else { setCycle(0); setSubStep(0); }
+      };
+      const reset = () => { setCycle(0); setSubStep(0); };
+      const finish = () => { setCycle(maxCycle); setSubStep(3); };
+
+      const started = cycle > 0 || subStep > 0;
+      const done    = cycle === maxCycle && subStep === 3;
+      // current template position (0-indexed) being synthesised in this cycle
+      const pos = cycle - 1; // position of the base being added in the current cycle
+      const readSoFar = newStrand.slice(0, done ? maxCycle : (subStep >= 2 ? cycle : cycle - 1));
+
+      const STEP_LABELS  = ["", "① Nucleotide addition", "② Imaging", "③ Cleavage & deprotection"];
+      const STEP_ICONS   = ["", "🧪", "📷", "✂️"];
+      const STEP_COLORS  = ["", "#2a7f8a", "#7c3aed", "#059669"];
+
+      // Description for each sub-step
+      const stepDesc = () => {
+        if (!started) return "Press Start to begin the first sequencing cycle. Each cycle reads one base of the template.";
+        const base     = newStrand[pos];
+        const tplBase  = template[pos];
+        if (subStep === 1) return `All four fluorescently-labeled, 3′-blocked dNTPs (ddA, ddT, ddG, ddC) flow across the flow cell. Only the complementary nucleotide (${base}) base-pairs with template position ${pos + 1} (${tplBase}) and is incorporated. The 3′-OH blocking group prevents further extension.`;
+        if (subStep === 2) return `A laser excites the fluorescent dye on the incorporated ${base}. The camera detects the emitted light: ${base === "A" ? "green" : base === "T" ? "red" : base === "G" ? "blue" : "yellow"} → base call = ${base}. Quality score is derived from signal intensity. Unused nucleotides are washed away.`;
+        if (subStep === 3) return `The fluorescent dye and the 3′-OH blocking group are chemically cleaved from the incorporated ${base}, regenerating a free 3′-OH. The polymerase is now free to extend in the next cycle.`;
+        return "";
+      };
+
+      const card = { background: "white", borderRadius: 8, padding: 20, marginBottom: 14, border: "1px solid #dee2e6" };
+      const baseBox = (b, highlight, small) => ({
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        width: small ? 22 : 28, height: small ? 22 : 28, borderRadius: 4,
+        background: highlight ? BASE_COLORS[b] : BASE_BG[b] || "#f8f9fa",
+        color: highlight ? "white" : BASE_COLORS[b] || "#333",
+        fontFamily: "monospace", fontWeight: 700, fontSize: small ? 11 : 13,
+        border: highlight ? `2px solid ${BASE_COLORS[b]}` : "1px solid #dee2e6",
+        flexShrink: 0,
+      });
+
+      return (
+        <div>
+          <div style={card}>
+            {/* Strand display */}
+            <div style={{ overflowX: "auto", marginBottom: 16 }}>
+              {/* Template strand */}
+              <div style={{ display: "flex", alignItems: "center", gap: 3, marginBottom: 4 }}>
+                <span style={{ fontSize: 11, color: "#6c757d", width: 110, flexShrink: 0 }}>Template 3′→5′:</span>
+                {template.split("").map((b, i) => (
+                  <div key={i} style={{
+                    ...baseBox(b, false, true),
+                    outline: started && i === pos && subStep <= 2 ? `3px solid ${BASE_COLORS[COMPLEMENT[b]]}` : "none",
+                    outlineOffset: 2,
+                  }}>{b}</div>
+                ))}
+              </div>
+              {/* Match indicators */}
+              <div style={{ display: "flex", alignItems: "center", gap: 3, marginBottom: 4 }}>
+                <span style={{ width: 110, flexShrink: 0 }} />
+                {template.split("").map((b, i) => {
+                  const showing = (subStep >= 2 && i === pos) || i < (subStep >= 2 ? cycle : cycle - 1);
+                  return (
+                    <span key={i} style={{
+                      width: 22, textAlign: "center", fontSize: 11, flexShrink: 0,
+                      color: showing ? "#6c757d" : "transparent",
+                    }}>|</span>
+                  );
+                })}
+              </div>
+              {/* Growing new strand */}
+              <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                <span style={{ fontSize: 11, color: "#6c757d", width: 110, flexShrink: 0 }}>New strand 5′→3′:</span>
+                {template.split("").map((b, i) => {
+                  const added = subStep >= 2 ? i <= pos : i < pos;
+                  const isCurrent = i === pos && subStep === 1;
+                  if (!started || i > pos) {
+                    return <div key={i} style={{ width: 22, height: 22, borderRadius: 4, background: "#f8f9fa", border: "1px dashed #dee2e6", flexShrink: 0 }} />;
+                  }
+                  return (
+                    <div key={i} style={{
+                      ...baseBox(newStrand[i], added, true),
+                      opacity: isCurrent ? 0.5 : 1,
+                      animation: isCurrent ? "pulse 1s infinite" : "none",
+                    }}>
+                      {added || isCurrent ? newStrand[i] : ""}
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Position ruler */}
+              <div style={{ display: "flex", alignItems: "center", gap: 3, marginTop: 2 }}>
+                <span style={{ width: 110, flexShrink: 0 }} />
+                {template.split("").map((_, i) => (
+                  <span key={i} style={{ width: 22, textAlign: "center", fontSize: 9, color: "#adb5bd", flexShrink: 0 }}>{i + 1}</span>
+                ))}
+              </div>
+            </div>
+
+            {/* Sub-step badge row */}
+            {started && !done && (
+              <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+                {[1, 2, 3].map(s => (
+                  <div key={s} style={{
+                    padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600,
+                    background: subStep === s ? STEP_COLORS[s] : "#f8f9fa",
+                    color: subStep === s ? "white" : "#6c757d",
+                    border: `1px solid ${subStep === s ? STEP_COLORS[s] : "#dee2e6"}`,
+                  }}>
+                    {STEP_ICONS[s]} {STEP_LABELS[s]}
+                  </div>
+                ))}
+                <span style={{ fontSize: 11, color: "#6c757d", alignSelf: "center", marginLeft: "auto" }}>
+                  Cycle {cycle} of {maxCycle}
+                </span>
+              </div>
+            )}
+
+            {/* Step description */}
+            <div style={{ background: "#f0fafa", border: "1px solid #b8dce2", borderRadius: 8, padding: 12, fontSize: 13, color: "#1e5f6a", lineHeight: 1.7, marginBottom: 14, minHeight: 64 }}>
+              {stepDesc()}
+            </div>
+
+            {/* Current base call highlight */}
+            {started && !done && subStep === 2 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, color: "#6c757d" }}>Base call at position {pos + 1}:</span>
+                <div style={{ ...baseBox(newStrand[pos], true, false), width: 44, height: 44, fontSize: 20, borderRadius: 8 }}>
+                  {newStrand[pos]}
+                </div>
+                <div style={{ fontSize: 12 }}>
+                  <span style={{ color: "#6c757d" }}>Template: </span>
+                  <span style={{ fontFamily: "monospace", fontWeight: 700, color: BASE_COLORS[template[pos]] }}>{template[pos]}</span>
+                  <span style={{ color: "#6c757d" }}> → Complement: </span>
+                  <span style={{ fontFamily: "monospace", fontWeight: 700, color: BASE_COLORS[newStrand[pos]] }}>{newStrand[pos]}</span>
+                  <span style={{ color: "#6c757d", marginLeft: 12 }}>Simulated Q-score: </span>
+                  <span style={{ fontWeight: 700, color: "#2a7f8a" }}>Q{28 + Math.floor(Math.random() * 10)}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Completed read */}
+            {done && (
+              <div style={{ background: "#e8f4f6", borderRadius: 8, padding: 12, marginBottom: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#2a7f8a", marginBottom: 6 }}>
+                  Sequencing complete — read of {maxCycle} bp
+                </div>
+                <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+                  {newStrand.map((b, i) => (
+                    <div key={i} style={{ ...baseBox(b, true, true) }}>{b}</div>
+                  ))}
+                </div>
+                <div style={{ fontFamily: "monospace", fontSize: 12, marginTop: 8, color: "#495057", wordBreak: "break-all" }}>
+                  Sequence: {newStrand.join("")}
+                </div>
+              </div>
+            )}
+
+            {/* Controls */}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {!started ? (
+                <button onClick={advance} style={ctrlBtn("#2a7f8a")}>▶ Start (Cycle 1)</button>
+              ) : (
+                <>
+                  <button onClick={back} disabled={cycle === 1 && subStep <= 1} style={ctrlBtn("#6c757d", cycle === 1 && subStep <= 1)}>← Back</button>
+                  {!done && <button onClick={advance} style={ctrlBtn("#2a7f8a")}>
+                    {subStep < 3 ? `Next step →` : `Next cycle (${cycle + 1}) →`}
+                  </button>}
+                  <button onClick={finish} style={ctrlBtn("#495057")}>⏭ Finish all</button>
+                  <button onClick={reset} style={ctrlBtn("#dc2626")}>↺ Reset</button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* SBS concept box */}
+          <div style={{ ...card, background: "#f0fafa", border: "1px solid #b8dce2" }}>
+            <h3 style={{ fontSize: 13, fontWeight: 700, color: "#2a7f8a", marginTop: 0, marginBottom: 8 }}>
+              Sequencing by synthesis (Illumina)
+            </h3>
+            <ol style={{ fontSize: 12, color: "#495057", lineHeight: 1.9, paddingLeft: 20, margin: 0 }}>
+              <li><strong>Library prep:</strong> Genomic DNA is fragmented and universal adapters are ligated to both ends.</li>
+              <li><strong>Cluster generation:</strong> Adapter-ligated fragments bind to the flow cell surface and are amplified by bridge PCR, creating ~1000-copy clusters per molecule.</li>
+              <li><strong>Nucleotide addition:</strong> All four 3′-blocked, fluorescently-labeled dNTPs are washed across the flow cell; one incorporates per cluster per cycle.</li>
+              <li><strong>Imaging:</strong> A laser excites fluorescent dyes; a camera records the color for each cluster simultaneously — this is the base call.</li>
+              <li><strong>Cleavage:</strong> The dye and 3′ blocking group are chemically removed, freeing the 3′-OH for the next cycle.</li>
+              <li><strong>Repeat:</strong> Steps 3–5 are repeated for each cycle (typically 50–300 cycles for Illumina HiSeq/NovaSeq).</li>
+            </ol>
+          </div>
+        </div>
+      );
+    }
+
+    function ctrlBtn(color, disabled) {
+      return {
+        padding: "7px 16px", fontSize: 12, fontWeight: 700, borderRadius: 6,
+        border: "none", cursor: disabled ? "not-allowed" : "pointer",
+        background: disabled ? "#e9ecef" : color,
+        color: disabled ? "#adb5bd" : "white", transition: "all 0.15s",
+      };
+    }
+
+    /* ═══════════════════ FASTQ & QUALITY PANEL ═══════════════════ */
+    function QualityPanel({ template }) {
+      const readLen = Math.min(template.length, 14);
+      // Build a realistic quality profile that decreases toward 3' end
+      const quals = Array.from({ length: readLen }, (_, i) => {
+        const base = 38 - Math.floor(i / readLen * 16);
+        return base - (i % 3 === 2 ? 2 : 0); // slight periodic dip
+      });
+      const seq = template.slice(0, readLen).split("").map((b, i) => {
+        if (Math.pow(10, -quals[i] / 10) > 0.01 && i === readLen - 3)
+          return "ATGC".replace(b, "")[0]; // introduce one realistic error near end
+        return b;
+      }).join("");
+      const fastqStr = `@Instrument:Run:Flowcell:Lane:Tile:X:Y\n${seq}\n+\n${quals.map(qToChar).join("")}`;
+
+      const [hovered, setHovered] = useState(null);
+
+      const PHRED = [
+        { q: 10, prob: "10%",    meaning: "1 error in 10 bases",   grade: "Poor" },
+        { q: 20, prob: "1%",     meaning: "1 error in 100 bases",  grade: "Acceptable" },
+        { q: 30, prob: "0.1%",   meaning: "1 error in 1000 bases", grade: "Good" },
+        { q: 40, prob: "0.01%",  meaning: "1 error in 10,000 bases", grade: "Excellent" },
+      ];
+
+      const maxQ = 40;
+      const card = { background: "white", borderRadius: 8, padding: 20, marginBottom: 14, border: "1px solid #dee2e6" };
+
+      const qColor = q => q >= 30 ? "#22C55E" : q >= 20 ? "#F59E0B" : "#EF4444";
+
+      return (
+        <div>
+          <div style={card}>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1e293b", marginTop: 0, marginBottom: 12 }}>
+              FASTQ format
+            </h3>
+            <p style={{ fontSize: 13, color: "#495057", marginBottom: 12, lineHeight: 1.7 }}>
+              Illumina outputs reads in <strong>FASTQ format</strong>: four lines per read — header, sequence,
+              separator, and per-base quality scores encoded as ASCII characters (Phred+33 encoding).
+            </p>
+            <div style={{ fontFamily: "monospace", fontSize: 12, lineHeight: 1.9, background: "#1e293b", color: "#e2e8f0",
+              borderRadius: 8, padding: "12px 16px", overflowX: "auto" }}>
+              <div style={{ color: "#94a3b8" }}>@Instrument:Run:Flowcell:Lane:Tile:X:Y</div>
+              <div>
+                {seq.split("").map((b, i) => (
+                  <span key={i} style={{ color: BASE_COLORS[b] || "#e2e8f0", fontWeight: 700,
+                    background: hovered === i ? "rgba(255,255,255,0.15)" : "transparent",
+                    borderRadius: 2, cursor: "pointer" }}
+                    onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}>
+                    {b}
+                  </span>
+                ))}
+              </div>
+              <div style={{ color: "#94a3b8" }}>+</div>
+              <div>
+                {quals.map((q, i) => (
+                  <span key={i} style={{ color: qColor(q), cursor: "pointer",
+                    background: hovered === i ? "rgba(255,255,255,0.15)" : "transparent",
+                    borderRadius: 2 }}
+                    onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}>
+                    {qToChar(q)}
+                  </span>
+                ))}
+              </div>
+            </div>
+            {hovered !== null && (
+              <div style={{ marginTop: 8, background: "#e8f4f6", borderRadius: 6, padding: "8px 14px", fontSize: 12 }}>
+                Position <strong>{hovered + 1}</strong> — Base:{" "}
+                <strong style={{ color: BASE_COLORS[seq[hovered]] }}>{seq[hovered]}</strong>
+                {" "}— ASCII '{qToChar(quals[hovered])}' (char {quals[hovered] + 33}) →{" "}
+                Q = {quals[hovered]} → error probability = {(qToProb(quals[hovered]) * 100).toFixed(2)}%
+              </div>
+            )}
+            <div style={{ marginTop: 10, fontSize: 12, color: "#6c757d" }}>
+              Hover over any base or quality character to inspect it.
+            </div>
+          </div>
+
+          {/* Quality bar chart */}
+          <div style={card}>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1e293b", marginTop: 0, marginBottom: 4 }}>
+              Per-base quality profile
+            </h3>
+            <p style={{ fontSize: 12, color: "#6c757d", marginBottom: 14, lineHeight: 1.6 }}>
+              Quality scores typically decline toward the 3′ end as the cluster signals become noisier.
+              Q≥30 (green) is generally considered high quality.
+            </p>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 120, overflowX: "auto" }}>
+              {quals.map((q, i) => (
+                <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, flexShrink: 0 }}>
+                  <div style={{ fontSize: 9, color: "#6c757d" }}>{q}</div>
+                  <div style={{
+                    width: 24, height: Math.round(q / maxQ * 90),
+                    background: qColor(q), borderRadius: "3px 3px 0 0",
+                    border: hovered === i ? "2px solid #1e293b" : "none",
+                    cursor: "pointer",
+                  }}
+                    onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)} />
+                  <div style={{ fontSize: 9, fontFamily: "monospace", color: BASE_COLORS[seq[i]], fontWeight: 700 }}>{seq[i]}</div>
+                  <div style={{ fontSize: 8, color: "#adb5bd" }}>{i + 1}</div>
+                </div>
+              ))}
+              <div style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end", paddingBottom: 28, marginLeft: 8, gap: 4 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 10 }}>
+                  <div style={{ width: 10, height: 10, background: "#22C55E", borderRadius: 2 }} /> Q≥30 (good)
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 10 }}>
+                  <div style={{ width: 10, height: 10, background: "#F59E0B", borderRadius: 2 }} /> Q20–29 (acceptable)
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 10 }}>
+                  <div style={{ width: 10, height: 10, background: "#EF4444", borderRadius: 2 }} /> Q&lt;20 (poor)
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Phred table */}
+          <div style={{ ...card, background: "#f0fafa", border: "1px solid #b8dce2" }}>
+            <h3 style={{ fontSize: 13, fontWeight: 700, color: "#2a7f8a", marginTop: 0, marginBottom: 10 }}>
+              Phred quality score reference
+            </h3>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "#e8f4f6" }}>
+                  {["Q score", "Error probability", "Accuracy", "Meaning", "Grade"].map(h => (
+                    <th key={h} style={{ padding: "6px 10px", borderBottom: "2px solid #b8dce2", textAlign: "left", fontWeight: 700 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {PHRED.map(row => (
+                  <tr key={row.q}>
+                    <td style={{ padding: "5px 10px", borderBottom: "1px solid #dee2e6", fontFamily: "monospace", fontWeight: 700, color: qColor(row.q) }}>Q{row.q}</td>
+                    <td style={{ padding: "5px 10px", borderBottom: "1px solid #dee2e6", fontFamily: "monospace" }}>{row.prob}</td>
+                    <td style={{ padding: "5px 10px", borderBottom: "1px solid #dee2e6", fontFamily: "monospace" }}>{(100 - parseFloat(row.prob)).toFixed(2)}%</td>
+                    <td style={{ padding: "5px 10px", borderBottom: "1px solid #dee2e6", color: "#495057" }}>{row.meaning}</td>
+                    <td style={{ padding: "5px 10px", borderBottom: "1px solid #dee2e6" }}>
+                      <span style={{ background: qColor(row.q) + "22", color: qColor(row.q), padding: "2px 8px", borderRadius: 4, fontWeight: 700, fontSize: 11 }}>{row.grade}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ marginTop: 10, fontSize: 12, color: "#495057" }}>
+              <strong>Formula:</strong> Q = −10 × log₁₀(P<sub>error</sub>) &nbsp;·&nbsp;
+              <strong>ASCII encoding (Illumina 1.8+):</strong> char = Q + 33
+              (e.g. Q30 → ASCII 63 → '?')
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ═══════════════════ READ MAPPING & COVERAGE PANEL ═══════════════════ */
+    function MappingPanel({ template }) {
+      const [readLen, setReadLen]   = useState(Math.min(8, template.length));
+      const [numReads, setNumReads] = useState(10);
+      const [showCons, setShowCons] = useState(true);
+
+      const reads    = useMemo(() => generateReads(template, readLen, numReads), [template, readLen, numReads]);
+      const laned    = useMemo(() => assignLanes(reads), [reads]);
+      const cov      = useMemo(() => coverage(reads, template.length), [reads, template.length]);
+      const cons     = useMemo(() => consensus(reads, template), [reads, template]);
+      const maxCov   = Math.max(...cov, 1);
+      const maxLane  = laned.length > 0 ? Math.max(...laned.map(r => r.lane)) + 1 : 0;
+      const meanCov  = cov.length > 0 ? (cov.reduce((a, b) => a + b, 0) / template.length).toFixed(1) : 0;
+      const pctCov   = cov.length > 0 ? Math.round(cov.filter(c => c > 0).length / template.length * 100) : 0;
+
+      // Lander-Waterman: P(covered) ≈ 1 - e^(-C)
+      const lwPred = Math.round((1 - Math.exp(-parseFloat(meanCov))) * 100);
+
+      const card = { background: "white", borderRadius: 8, padding: 20, marginBottom: 14, border: "1px solid #dee2e6" };
+      const CELL = 26; // px per base cell
+
+      return (
+        <div>
+          {/* Controls */}
+          <div style={card}>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#6c757d", marginBottom: 4 }}>READ LENGTH (bp)</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {[6, 8, 10, 12].filter(l => l <= template.length).map(l => (
+                    <button key={l} onClick={() => setReadLen(l)} style={{
+                      padding: "5px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer", fontWeight: 600,
+                      border: readLen === l ? "2px solid #2a7f8a" : "1px solid #dee2e6",
+                      background: readLen === l ? "#e8f4f6" : "white",
+                      color: readLen === l ? "#2a7f8a" : "#6c757d",
+                    }}>{l}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#6c757d", marginBottom: 4 }}>NUMBER OF READS</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {[5, 10, 15, 20].map(n => (
+                    <button key={n} onClick={() => setNumReads(n)} style={{
+                      padding: "5px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer", fontWeight: 600,
+                      border: numReads === n ? "2px solid #2a7f8a" : "1px solid #dee2e6",
+                      background: numReads === n ? "#e8f4f6" : "white",
+                      color: numReads === n ? "#2a7f8a" : "#6c757d",
+                    }}>{n}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#6c757d", marginBottom: 4 }}>SHOW CONSENSUS</div>
+                <button onClick={() => setShowCons(s => !s)} style={{
+                  padding: "5px 14px", fontSize: 12, borderRadius: 6, cursor: "pointer", fontWeight: 600,
+                  border: showCons ? "2px solid #2a7f8a" : "1px solid #dee2e6",
+                  background: showCons ? "#e8f4f6" : "white",
+                  color: showCons ? "#2a7f8a" : "#6c757d",
+                }}>{showCons ? "On" : "Off"}</button>
+              </div>
+            </div>
+          </div>
+
+          {/* Pileup view */}
+          <div style={card}>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1e293b", marginTop: 0, marginBottom: 12 }}>
+              Read pileup
+            </h3>
+            <div style={{ overflowX: "auto" }}>
+              <div style={{ minWidth: template.length * CELL + 120 }}>
+                {/* Position ruler */}
+                <div style={{ display: "flex", marginBottom: 2 }}>
+                  <div style={{ width: 80, flexShrink: 0 }} />
+                  {template.split("").map((_, i) => (
+                    <div key={i} style={{ width: CELL, flexShrink: 0, textAlign: "center", fontSize: 9, color: "#adb5bd" }}>
+                      {(i + 1) % 5 === 0 || i === 0 ? i + 1 : ""}
+                    </div>
+                  ))}
+                </div>
+                {/* Reference row */}
+                <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
+                  <div style={{ width: 80, flexShrink: 0, fontSize: 11, fontWeight: 700, color: "#6c757d" }}>Reference</div>
+                  {template.split("").map((b, i) => (
+                    <div key={i} style={{
+                      width: CELL, height: CELL, flexShrink: 0, display: "flex", alignItems: "center",
+                      justifyContent: "center", fontSize: 12, fontFamily: "monospace", fontWeight: 700,
+                      background: BASE_BG[b], color: BASE_COLORS[b], border: "1px solid #dee2e6",
+                      borderRadius: 3,
+                    }}>{b}</div>
+                  ))}
+                </div>
+                {/* Read rows */}
+                {Array.from({ length: maxLane }, (_, lane) => {
+                  const row = laned.filter(r => r.lane === lane);
+                  return (
+                    <div key={lane} style={{ display: "flex", alignItems: "center", marginBottom: 1 }}>
+                      <div style={{ width: 80, flexShrink: 0, fontSize: 9, color: "#6c757d" }}>
+                        {row.length > 0 ? row[0].id : ""}
+                      </div>
+                      {template.split("").map((refB, i) => {
+                        const read = row.find(r => i >= r.start && i < r.start + r.seq.length);
+                        if (!read) return <div key={i} style={{ width: CELL, height: CELL - 4, flexShrink: 0 }} />;
+                        const b = read.seq[i - read.start];
+                        const mismatch = b !== refB;
+                        return (
+                          <div key={i} style={{
+                            width: CELL, height: CELL - 4, flexShrink: 0,
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            fontSize: 11, fontFamily: "monospace", fontWeight: 700,
+                            background: mismatch ? "#FEE2E2" : BASE_BG[b],
+                            color: mismatch ? "#DC2626" : BASE_COLORS[b],
+                            border: mismatch ? "1px solid #FCA5A5" : "none",
+                            borderRadius: 2,
+                          }}>{b}</div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+                {/* Consensus row */}
+                {showCons && (
+                  <div style={{ display: "flex", alignItems: "center", marginTop: 4, borderTop: "2px solid #dee2e6", paddingTop: 4 }}>
+                    <div style={{ width: 80, flexShrink: 0, fontSize: 11, fontWeight: 700, color: "#2a7f8a" }}>Consensus</div>
+                    {cons.map((c, i) => (
+                      <div key={i} style={{
+                        width: CELL, height: CELL, flexShrink: 0, display: "flex", alignItems: "center",
+                        justifyContent: "center", fontSize: 12, fontFamily: "monospace", fontWeight: 700,
+                        background: c.depth === 0 ? "#f8f9fa" : c.match ? BASE_BG[c.base] : "#FEE2E2",
+                        color: c.depth === 0 ? "#adb5bd" : c.match ? BASE_COLORS[c.base] : "#DC2626",
+                        border: c.match ? "none" : c.depth > 0 ? "2px solid #FCA5A5" : "1px dashed #dee2e6",
+                        borderRadius: 3,
+                        title: `Depth: ${c.depth}`,
+                      }}>{c.depth > 0 ? c.base : "—"}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div style={{ marginTop: 8, fontSize: 11, color: "#6c757d" }}>
+              <span style={{ background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 3, padding: "1px 5px", color: "#DC2626", fontWeight: 700, fontSize: 10 }}>red</span>
+              {" = mismatch (sequencing error or variant) · "}
+              consensus mismatches indicate positions where reads disagree with the reference
+            </div>
+          </div>
+
+          {/* Coverage histogram */}
+          <div style={card}>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1e293b", marginTop: 0, marginBottom: 12 }}>
+              Coverage depth per position
+            </h3>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 100, overflowX: "auto" }}>
+              {cov.map((c, i) => (
+                <div key={i} style={{
+                  display: "flex", flexDirection: "column", alignItems: "center",
+                  gap: 1, flexShrink: 0, width: CELL,
+                }}>
+                  <div style={{ fontSize: 8, color: "#6c757d" }}>{c > 0 ? c : ""}</div>
+                  <div style={{
+                    width: CELL - 2, height: Math.round(c / maxCov * 70),
+                    background: c === 0 ? "#fee2e2" : c < 3 ? "#fde68a" : "#2a7f8a",
+                    borderRadius: "3px 3px 0 0", minHeight: c === 0 ? 4 : undefined,
+                    border: c === 0 ? "1px solid #fca5a5" : "none",
+                  }} />
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 2, marginTop: 2, overflowX: "auto" }}>
+              <div style={{ width: 0 }} />
+              {template.split("").map((b, i) => (
+                <div key={i} style={{ width: CELL, flexShrink: 0, textAlign: "center", fontSize: 9, color: "#adb5bd" }}>{i + 1}</div>
+              ))}
+            </div>
+            {/* Legend + stats */}
+            <div style={{ display: "flex", gap: 12, marginTop: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 11, color: "#6c757d", display: "flex", gap: 8 }}>
+                <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                  <div style={{ width: 10, height: 10, background: "#2a7f8a", borderRadius: 2 }} />≥3×
+                </span>
+                <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                  <div style={{ width: 10, height: 10, background: "#fde68a", borderRadius: 2 }} />1–2×
+                </span>
+                <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                  <div style={{ width: 10, height: 10, background: "#fee2e2", borderRadius: 2, border: "1px solid #fca5a5" }} />0× (gap)
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Coverage statistics */}
+          <div style={card}>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#1e293b", marginTop: 0, marginBottom: 12 }}>
+              Coverage statistics
+            </h3>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+              {[
+                ["Mean depth", `${meanCov}×`],
+                ["Max depth", `${maxCov}×`],
+                ["Bases covered", `${pctCov}%`],
+                ["Total reads", numReads],
+                ["Read length", `${readLen} bp`],
+                ["Genome length", `${template.length} bp`],
+              ].map(([k, v]) => (
+                <div key={k} style={{ background: "#e8f4f6", borderRadius: 6, padding: "8px 14px" }}>
+                  <div style={{ fontSize: 10, color: "#6c757d", fontWeight: 700 }}>{k}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: "#2a7f8a" }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ background: "#f0fafa", border: "1px solid #b8dce2", borderRadius: 8, padding: 12, fontSize: 13, color: "#495057" }}>
+              <strong>Lander-Waterman equation:</strong> P(base covered) = 1 − e<sup>−C</sup>, where C = mean coverage.
+              &nbsp;At <strong>{meanCov}×</strong> average depth, the expected fraction of bases covered is{" "}
+              <strong style={{ color: "#2a7f8a" }}>{lwPred}%</strong>
+              {lwPred !== pctCov ? ` (observed: ${pctCov}% — small-genome edge effects apply)` : ""}.
+            </div>
+          </div>
+
+          {/* Sanger vs NGS comparison */}
+          <div style={{ ...card, background: "#f0fafa", border: "1px solid #b8dce2" }}>
+            <h3 style={{ fontSize: 13, fontWeight: 700, color: "#2a7f8a", marginTop: 0, marginBottom: 10 }}>
+              Sanger vs short-read sequencing
+            </h3>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: "#e8f4f6" }}>
+                    {["Property", "Sanger", "Short-read (Illumina)"].map(h => (
+                      <th key={h} style={{ padding: "6px 10px", borderBottom: "2px solid #b8dce2", textAlign: "left", fontWeight: 700 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    ["Read length",       "700–1000 bp",         "50–300 bp"],
+                    ["Throughput",        "1 read / run",        "Billions of reads / run"],
+                    ["Accuracy",          "~99.9%",              "~99.9% (per base, with Q30+)"],
+                    ["Cost per Mb",       "Very high (~$2,400)", "Very low (~$0.01)"],
+                    ["Time per run",      "Hours",               "Hours to days"],
+                    ["Chemistry",         "Chain termination (ddNTP)", "Sequencing by synthesis (reversible terminators)"],
+                    ["Typical use",       "Single gene, validation, Sanger confirmation", "WGS, RNA-seq, ChIP-seq, amplicon panels"],
+                    ["Assembly needed?",  "No (one long read)",  "Yes (reads must be assembled or mapped)"],
+                  ].map(([prop, sang, ngs]) => (
+                    <tr key={prop} style={{ background: "white" }}>
+                      <td style={{ padding: "5px 10px", borderBottom: "1px solid #dee2e6", fontWeight: 700 }}>{prop}</td>
+                      <td style={{ padding: "5px 10px", borderBottom: "1px solid #dee2e6", color: "#495057" }}>{sang}</td>
+                      <td style={{ padding: "5px 10px", borderBottom: "1px solid #dee2e6", color: "#495057" }}>{ngs}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ═══════════════════ MAIN APP ═══════════════════════════════ */
+    function App() {
+      const [presetIdx, setPresetIdx]   = useState(0);
+      const [customSeq, setCustomSeq]   = useState("");
+      const [useCustom, setUseCustom]   = useState(false);
+      const [tab, setTab]               = useState("sbs");
+
+      const template = (useCustom ? customSeq : PRESETS[presetIdx].seq)
+        .toUpperCase().replace(/[^ATGC]/g, "");
+
+      const card = { background: "white", borderRadius: 8, padding: 20, marginBottom: 16, border: "1px solid #dee2e6" };
+      const tabBtn = (id) => ({
+        padding: "8px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer",
+        border: "none", borderBottom: tab === id ? "3px solid #2a7f8a" : "3px solid transparent",
+        background: "transparent", color: tab === id ? "#2a7f8a" : "#6c757d",
+        transition: "all 0.15s",
+      });
+
+      return (
+        <div style={{
+          fontFamily: "'Nunito Sans', -apple-system, sans-serif",
+          minHeight: "100vh", background: "#f8f9fa", paddingBottom: 40,
+        }}>
+          {/* Header */}
+          <div style={{ textAlign: "center", padding: "52px 20px 20px" }}>
+            <h1 style={{ fontSize: 24, fontWeight: 700, color: "#2a7f8a", margin: 0 }}>
+              🔬 Short-Read Sequencing Simulator
+            </h1>
+            <p style={{ fontSize: 13, color: "#6c757d", margin: "6px 0 0" }}>
+              Illumina sequencing by synthesis — BSB511 / BENG451
+            </p>
+          </div>
+
+          <div style={{ maxWidth: 900, margin: "0 auto", padding: "0 16px" }}>
+
+            {/* Template selector */}
+            <div style={card}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12, alignItems: "flex-start" }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6c757d", marginBottom: 6, textTransform: "uppercase" }}>Template (reference) sequence</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {PRESETS.map((p, i) => (
+                      <button key={i} onClick={() => { setPresetIdx(i); setUseCustom(false); }} style={{
+                        padding: "4px 12px", fontSize: 11, borderRadius: 6, cursor: "pointer", fontWeight: 600,
+                        border: presetIdx === i && !useCustom ? "2px solid #2a7f8a" : "1px solid #dee2e6",
+                        background: presetIdx === i && !useCustom ? "#e8f4f6" : "white",
+                        color: presetIdx === i && !useCustom ? "#2a7f8a" : "#6c757d",
+                      }}>{p.label}</button>
+                    ))}
+                    <button onClick={() => { setUseCustom(true); if (!customSeq) setCustomSeq(PRESETS[presetIdx].seq); }} style={{
+                      padding: "4px 12px", fontSize: 11, borderRadius: 6, cursor: "pointer", fontWeight: 600,
+                      border: useCustom ? "2px solid #2a7f8a" : "1px solid #dee2e6",
+                      background: useCustom ? "#e8f4f6" : "white",
+                      color: useCustom ? "#2a7f8a" : "#6c757d",
+                    }}>Custom</button>
+                  </div>
+                </div>
+              </div>
+              {useCustom ? (
+                <input value={customSeq} onChange={e => setCustomSeq(e.target.value)}
+                  placeholder="Enter DNA sequence (A, T, G, C only)…"
+                  style={{ width: "100%", padding: "8px 12px", fontFamily: "monospace", fontSize: 14,
+                    border: "1px solid #dee2e6", borderRadius: 6, letterSpacing: 1.5, fontWeight: 700,
+                    color: "#2a7f8a", outline: "none" }} />
+              ) : (
+                <div style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, letterSpacing: 1.5,
+                  color: "#2a7f8a", background: "#f8f9fa", padding: "8px 12px", borderRadius: 6,
+                  border: "1px solid #dee2e6", wordBreak: "break-all" }}>{template}
+                </div>
+              )}
+              <div style={{ marginTop: 6, fontSize: 11, color: "#6c757d" }}>
+                {template.length} bp · GC content: {template.length > 0 ? Math.round(template.split("").filter(b => b === "G" || b === "C").length / template.length * 100) : 0}%
+              </div>
+            </div>
+
+            {/* Tab bar */}
+            <div style={{ display: "flex", borderBottom: "2px solid #dee2e6", marginBottom: 20 }}>
+              <button style={tabBtn("sbs")}     onClick={() => setTab("sbs")}>⚗️ Sequencing by Synthesis</button>
+              <button style={tabBtn("quality")} onClick={() => setTab("quality")}>📊 Read Quality</button>
+              <button style={tabBtn("mapping")} onClick={() => setTab("mapping")}>🗺️ Read Mapping</button>
+            </div>
+
+            {template.length < 4 && (
+              <div style={{ background: "#fff3cd", border: "1px solid #fcd34d", borderRadius: 8, padding: 12, fontSize: 13, color: "#856404", marginBottom: 16 }}>
+                Please enter a sequence of at least 4 bases to use the simulator.
+              </div>
+            )}
+
+            {template.length >= 4 && tab === "sbs"     && <SBSPanel     template={template} />}
+            {template.length >= 4 && tab === "quality" && <QualityPanel  template={template} />}
+            {template.length >= 4 && tab === "mapping" && <MappingPanel  template={template} />}
+
+            <div style={{ textAlign: "center", fontSize: 11, color: "#6c757d", padding: "10px 0 20px" }}>
+              BSB511 / BENG451 — Bioinformatics Fundamentals — Short-Read Sequencing Simulator
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
