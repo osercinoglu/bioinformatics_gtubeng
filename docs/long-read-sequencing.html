@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Long-Read Sequencing — BSB511 / BENG451</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Nunito+Sans:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Nunito Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    h1, h2, h3, h4, h5, h6 { font-family: 'Nunito', system-ui, sans-serif; }
+    .back-link {
+      position: fixed; top: 14px; left: 14px; z-index: 100;
+      background: white; color: #2a7f8a; border: 1px solid #b8dce2;
+      padding: 6px 14px; border-radius: 8px; font-size: 0.8rem;
+      text-decoration: none; font-family: 'Nunito Sans', sans-serif;
+      transition: all 0.2s ease-in-out;
+    }
+    .back-link:hover { background: #e8f4f6; color: #1e5f6a; border-color: #2a7f8a; }
+  </style>
+</head>
+<body>
+<a class="back-link" href="index.html">← Back</a>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useMemo, useCallback } = React;
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+function makePrng(seed) {
+  let s = seed >>> 0;
+  return () => { s = (Math.imul(1664525, s) + 1013904223) >>> 0; return s / 0xffffffff; };
+}
+
+const BASES = ['A','C','G','T'];
+
+function randBase(rng) { return BASES[Math.floor(rng() * 4)]; }
+
+function generateTemplate(seed, len) {
+  const rng = makePrng(seed);
+  return Array.from({ length: len }, () => randBase(rng)).join('');
+}
+
+function mutate(base, rng) {
+  const others = BASES.filter(b => b !== base);
+  return others[Math.floor(rng() * 3)];
+}
+
+function singlePass(template, errorRate, rng) {
+  return template.split('').map(b => {
+    const r = rng();
+    if (r < errorRate * 0.5) return '';          // deletion
+    if (r < errorRate * 0.7) return b + randBase(rng); // insertion
+    if (r < errorRate)       return mutate(b, rng);   // substitution
+    return b;
+  }).join('');
+}
+
+function ccsConsensus(passes) {
+  const len = passes[0].length;
+  return Array.from({ length: len }, (_, i) => {
+    const counts = {};
+    passes.forEach(p => { const b = p[i] || '-'; counts[b] = (counts[b]||0)+1; });
+    return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
+  }).join('');
+}
+
+// Nanopore: deterministic current level from k-mer
+function kmerLevel(kmer) {
+  let h = 0;
+  for (let i = 0; i < kmer.length; i++) {
+    h = Math.imul(h * 31 + kmer.charCodeAt(i), 1) >>> 0;
+  }
+  // map to pA range 80–180
+  return 80 + (h % 101);
+}
+
+// colours
+const C = { A: '#22c55e', C: '#3b82f6', G: '#f59e0b', T: '#ef4444' };
+const teal = '#2a7f8a', tealLight = '#e8f4f6', tealMid = '#b8dce2', tealDark = '#1e5f6a';
+
+// shared style helpers
+const card = { background:'#fff', border:'1px solid #dee2e6', borderRadius:8, padding:20 };
+const btn = (active=false) => ({
+  padding:'6px 16px', borderRadius:6, border:'1px solid', cursor:'pointer', fontSize:'0.82rem',
+  fontFamily:"'Nunito Sans', sans-serif", fontWeight:600, transition:'all 0.15s',
+  background: active ? teal : '#fff',
+  color: active ? '#fff' : teal,
+  borderColor: active ? teal : tealMid,
+});
+
+// ── Tab 1: PacBio SMRT ───────────────────────────────────────────────────────
+const TEMPLATE_LEN = 18;
+const SEED = 7;
+const SMRT_ERROR = 0.13;
+
+const PASS_OPTIONS = [1, 2, 3, 5, 10, 15];
+
+function PacbioTab() {
+  const [subTab, setSubTab] = useState('zmw');
+  const [pulseStep, setPulseStep] = useState(0);
+  const [numPasses, setNumPasses] = useState(3);
+
+  const template = useMemo(() => generateTemplate(SEED, TEMPLATE_LEN), []);
+
+  // pulse trace: one entry per template base, color = base color
+  const pulses = useMemo(() => template.split('').map((b, i) => ({
+    base: b, pos: i,
+    // inter-pulse gap 1-3 units, pulse width 0.8
+    start: i * 3.2 + (i % 3) * 0.4,
+    width: 0.9,
+    color: C[b],
+  })), [template]);
+
+  // CCS
+  const passes = useMemo(() => {
+    const rng = makePrng(SEED + 100);
+    return Array.from({ length: numPasses }, () => singlePass(template, SMRT_ERROR, rng));
+  }, [template, numPasses]);
+
+  const consensus = useMemo(() => ccsConsensus(passes), [passes]);
+
+  const traceW = 560, traceH = 80;
+  const totalSpan = TEMPLATE_LEN * 3.2 + 2;
+  const scale = traceW / totalSpan;
+
+  const highlightedBase = pulseStep < pulses.length ? pulses[pulseStep] : null;
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+      {/* sub-tabs */}
+      <div style={{ display:'flex', gap:8 }}>
+        {[['zmw','ZMW Structure'],['trace','Pulse Trace'],['ccs','CCS / HiFi Accuracy']].map(([id,label])=>(
+          <button key={id} style={btn(subTab===id)} onClick={()=>setSubTab(id)}>{label}</button>
+        ))}
+      </div>
+
+      {subTab==='zmw' && (
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+          <div style={card}>
+            <h3 style={{ fontSize:'0.95rem', marginBottom:12 }}>Zero-Mode Waveguide (ZMW)</h3>
+            <svg viewBox="0 0 260 320" width="100%" style={{ maxHeight:320 }}>
+              {/* aluminum cladding */}
+              <rect x={0} y={0} width={260} height={320} fill="#e5e7eb"/>
+              {/* ZMW well (cylinder cross-section) */}
+              <rect x={90} y={0} width={80} height={200} fill="#f0f9ff"/>
+              {/* evanescent field glow */}
+              <defs>
+                <radialGradient id="evGrad" cx="50%" cy="100%" r="60%">
+                  <stop offset="0%" stopColor="#fde68a" stopOpacity="0.8"/>
+                  <stop offset="100%" stopColor="#fde68a" stopOpacity="0"/>
+                </radialGradient>
+              </defs>
+              <ellipse cx={130} cy={200} rx={40} ry={30} fill="url(#evGrad)"/>
+              {/* bottom glass */}
+              <rect x={0} y={200} width={260} height={120} fill="#dbeafe" opacity={0.5}/>
+              {/* polymerase */}
+              <ellipse cx={130} cy={198} rx={14} ry={9} fill="#6366f1"/>
+              <text x={130} y={201} textAnchor="middle" fontSize={7} fill="white" fontFamily="Nunito Sans,sans-serif">Pol</text>
+              {/* SMRTbell template */}
+              <path d="M 122 188 Q 100 170 122 152 Q 144 134 122 116 Q 100 98 122 80"
+                    stroke="#059669" strokeWidth={2.5} fill="none" strokeDasharray="4,2"/>
+              <path d="M 138 188 Q 160 170 138 152 Q 116 134 138 116 Q 160 98 138 80"
+                    stroke="#059669" strokeWidth={2.5} fill="none"/>
+              <text x={156} y={135} fontSize={7} fill="#059669" fontFamily="Nunito Sans,sans-serif">SMRTbell</text>
+              {/* fluorescent nucleotide */}
+              <circle cx={115} cy={205} r={5} fill="#f59e0b" opacity={0.9}/>
+              <circle cx={145} cy={210} r={5} fill="#ef4444" opacity={0.7}/>
+              <circle cx={110} cy={215} r={5} fill="#22c55e" opacity={0.7}/>
+              {/* labels */}
+              <text x={40} y={100} fontSize={8} fill="#374151" fontFamily="Nunito Sans,sans-serif">Aluminum</text>
+              <text x={40} y={112} fontSize={8} fill="#374151" fontFamily="Nunito Sans,sans-serif">cladding</text>
+              <line x1={88} y1={100} x2={88} y2={100} stroke="#374151"/>
+              <text x={40} y={175} fontSize={8} fill="#374151" fontFamily="Nunito Sans,sans-serif">Evanescent</text>
+              <text x={40} y={187} fontSize={8} fill="#374151" fontFamily="Nunito Sans,sans-serif">field (~30 nm)</text>
+              <text x={170} y={210} fontSize={8} fill="#374151" fontFamily="Nunito Sans,sans-serif">Glass</text>
+              <text x={170} y={222} fontSize={8} fill="#374151" fontFamily="Nunito Sans,sans-serif">bottom</text>
+              <text x={40} y={240} fontSize={8} fill="#6366f1" fontFamily="Nunito Sans,sans-serif">● Polymerase</text>
+              <text x={40} y={254} fontSize={8} fill="#059669" fontFamily="Nunito Sans,sans-serif">— SMRTbell</text>
+              <text x={40} y={268} fontSize={8} fill="#92400e" fontFamily="Nunito Sans,sans-serif">● Labeled dNTPs</text>
+              {/* dimension arrow for well width */}
+              <line x1={90} y1={215} x2={170} y2={215} stroke="#6b7280" strokeWidth={0.8} markerEnd="url(#arr)" markerStart="url(#arr2)"/>
+              <text x={130} y={227} textAnchor="middle" fontSize={7} fill="#6b7280" fontFamily="Nunito Sans,sans-serif">~70 nm</text>
+              <defs>
+                <marker id="arr" markerWidth="4" markerHeight="4" refX="4" refY="2" orient="auto">
+                  <path d="M0,0 L4,2 L0,4" fill="none" stroke="#6b7280" strokeWidth="0.8"/>
+                </marker>
+                <marker id="arr2" markerWidth="4" markerHeight="4" refX="0" refY="2" orient="auto-start-reverse">
+                  <path d="M0,0 L4,2 L0,4" fill="none" stroke="#6b7280" strokeWidth="0.8"/>
+                </marker>
+              </defs>
+            </svg>
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+            <div style={card}>
+              <h3 style={{ fontSize:'0.9rem', marginBottom:8 }}>How it works</h3>
+              <ol style={{ paddingLeft:18, fontSize:'0.82rem', lineHeight:1.8, color:'#374151' }}>
+                <li>A <strong>ZMW</strong> is a nano-well (~70 nm diameter) in an aluminum film on glass — far smaller than the wavelength of light.</li>
+                <li>Light enters but forms an <strong>evanescent field</strong> that decays within ~30 nm of the glass surface.</li>
+                <li>A single <strong>DNA polymerase</strong> is immobilized at the bottom inside the illuminated volume.</li>
+                <li>A <strong>SMRTbell</strong> circular template is threaded through the polymerase, allowing multiple passes around the same molecule.</li>
+                <li>Fluorescently labeled <strong>dNTPs</strong> diffuse in and out; only the nucleotide held briefly during incorporation produces a detectable fluorescent pulse.</li>
+                <li>The color of each pulse identifies the incorporated base → <strong>real-time sequencing</strong>.</li>
+              </ol>
+            </div>
+            <div style={{ ...card, background: tealLight, border:`1px solid ${tealMid}` }}>
+              <h3 style={{ fontSize:'0.85rem', marginBottom:6, color: tealDark }}>Key numbers</h3>
+              <table style={{ fontSize:'0.78rem', borderCollapse:'collapse', width:'100%' }}>
+                <tbody>
+                  {[
+                    ['Read length', '10 – 25 kb (HiFi)'],
+                    ['Raw accuracy', '~87 % per pass'],
+                    ['HiFi accuracy (≥3 passes)', '>99.9 %'],
+                    ['Throughput', '~360 Gb / SMRT Cell (Revio)'],
+                    ['ZMWs per chip', '25 million (Revio)'],
+                  ].map(([k,v])=>(
+                    <tr key={k}>
+                      <td style={{ padding:'3px 8px 3px 0', color:'#374151', fontWeight:600 }}>{k}</td>
+                      <td style={{ padding:'3px 0', color:'#374151' }}>{v}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {subTab==='trace' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+          <div style={card}>
+            <h3 style={{ fontSize:'0.95rem', marginBottom:10 }}>Fluorescence Pulse Trace</h3>
+            <p style={{ fontSize:'0.82rem', color:'#6c757d', marginBottom:14 }}>
+              Each incorporated nucleotide generates a fluorescent pulse whose color identifies the base.
+              Use the controls to step through the trace one base at a time.
+            </p>
+            <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap' }}>
+              <button style={btn()} onClick={()=>setPulseStep(s=>Math.max(0,s-1))}>◀ Prev</button>
+              <button style={btn()} onClick={()=>setPulseStep(s=>Math.min(pulses.length-1,s+1))}>Next ▶</button>
+              <button style={btn()} onClick={()=>setPulseStep(0)}>Reset</button>
+              <span style={{ fontSize:'0.82rem', color:'#6c757d', alignSelf:'center' }}>
+                Position: {pulseStep + 1} / {pulses.length}
+                {highlightedBase && <span style={{ fontWeight:700, color: highlightedBase.color, marginLeft:8 }}>
+                  Base: {highlightedBase.base}
+                </span>}
+              </span>
+            </div>
+            {/* trace SVG */}
+            <svg viewBox={`0 0 ${traceW} ${traceH + 30}`} width="100%" style={{ background:'#f9fafb', borderRadius:6, border:'1px solid #e5e7eb' }}>
+              {/* axis */}
+              <line x1={30} y1={traceH-5} x2={traceW} y2={traceH-5} stroke="#d1d5db" strokeWidth={0.8}/>
+              <text x={0} y={20} fontSize={8} fill="#6b7280" fontFamily="Nunito Sans,sans-serif">intensity</text>
+              {/* pulses */}
+              {pulses.map((p, i) => {
+                const x = 30 + p.start * scale;
+                const pw = p.width * scale;
+                const isActive = i === pulseStep;
+                const isPast = i < pulseStep;
+                return (
+                  <g key={i}>
+                    <rect
+                      x={x} y={traceH - 55}
+                      width={pw} height={50}
+                      fill={p.color}
+                      opacity={isActive ? 1 : isPast ? 0.6 : 0.2}
+                      rx={2}
+                      style={{ cursor:'pointer' }}
+                      onClick={()=>setPulseStep(i)}
+                    />
+                    {isActive && (
+                      <rect x={x-1} y={traceH-56} width={pw+2} height={52} fill="none" stroke="#111" strokeWidth={1.5} rx={2}/>
+                    )}
+                    <text x={x + pw/2} y={traceH+14} textAnchor="middle" fontSize={7}
+                          fill={p.color} fontFamily="Nunito Sans,sans-serif" fontWeight="700">
+                      {p.base}
+                    </text>
+                  </g>
+                );
+              })}
+              {/* time arrow */}
+              <text x={traceW/2} y={traceH+26} textAnchor="middle" fontSize={7} fill="#9ca3af" fontFamily="Nunito Sans,sans-serif">time →</text>
+            </svg>
+            {/* legend */}
+            <div style={{ display:'flex', gap:12, marginTop:10, flexWrap:'wrap' }}>
+              {BASES.map(b=>(
+                <span key={b} style={{ display:'flex', alignItems:'center', gap:4, fontSize:'0.78rem' }}>
+                  <span style={{ width:12, height:12, borderRadius:2, background:C[b], display:'inline-block' }}/>
+                  {b}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div style={card}>
+            <h3 style={{ fontSize:'0.9rem', marginBottom:8 }}>Interpulse distance (IPD)</h3>
+            <p style={{ fontSize:'0.82rem', color:'#6c757d', lineHeight:1.6 }}>
+              The time between pulses (IPD) reflects how long the polymerase pauses before incorporating each base.
+              IPD is sensitive to DNA modifications (e.g., m6A, m5C) — enabling <strong>direct detection of base modifications</strong>
+              from native DNA without chemical conversion.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {subTab==='ccs' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+          <div style={card}>
+            <h3 style={{ fontSize:'0.95rem', marginBottom:8 }}>CCS / HiFi: Accuracy vs. Number of Passes</h3>
+            <p style={{ fontSize:'0.82rem', color:'#6c757d', marginBottom:14 }}>
+              Each full traversal of the circular SMRTbell template is one <strong>pass</strong>.
+              Consensus across multiple passes (CCS) dramatically reduces the ~13% raw error rate.
+            </p>
+            <div style={{ display:'flex', gap:8, marginBottom:14, flexWrap:'wrap', alignItems:'center' }}>
+              <span style={{ fontSize:'0.82rem', color:'#374151' }}>Passes:</span>
+              {PASS_OPTIONS.map(n=>(
+                <button key={n} style={btn(numPasses===n)} onClick={()=>setNumPasses(n)}>{n}</button>
+              ))}
+            </div>
+            {/* per-pass sequences */}
+            <div style={{ overflowX:'auto' }}>
+              <table style={{ borderCollapse:'collapse', fontSize:'0.75rem', fontFamily:'monospace', whiteSpace:'nowrap' }}>
+                <thead>
+                  <tr>
+                    <td style={{ paddingRight:10, color:'#6c757d', fontFamily:"'Nunito Sans',sans-serif" }}>Template</td>
+                    {template.split('').map((b,i)=>(
+                      <td key={i} style={{ width:22, textAlign:'center', fontWeight:700, color: C[b] }}>{b}</td>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {passes.map((p,pi)=>(
+                    <tr key={pi}>
+                      <td style={{ paddingRight:10, color:'#6c757d', fontFamily:"'Nunito Sans',sans-serif" }}>Pass {pi+1}</td>
+                      {template.split('').map((tb,i)=>{
+                        const rb = p[i] || '–';
+                        const err = rb !== tb;
+                        return (
+                          <td key={i} style={{ width:22, textAlign:'center', color: err ? '#ef4444' : '#16a34a',
+                                               background: err ? '#fef2f2' : 'transparent', borderRadius:2 }}>
+                            {rb}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                  <tr style={{ borderTop:'2px solid #dee2e6' }}>
+                    <td style={{ paddingRight:10, fontWeight:700, color: teal, fontFamily:"'Nunito Sans',sans-serif" }}>Consensus</td>
+                    {template.split('').map((tb,i)=>{
+                      const cb = consensus[i] || '–';
+                      const err = cb !== tb;
+                      return (
+                        <td key={i} style={{ width:22, textAlign:'center', fontWeight:700,
+                                             color: err ? '#ef4444' : teal,
+                                             background: err ? '#fef2f2' : tealLight, borderRadius:2 }}>
+                          {cb}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p style={{ fontSize:'0.78rem', color:'#6c757d', marginTop:10 }}>
+              Red = error, green = correct. Errors shown are simulated at ~13% raw error rate per pass.
+            </p>
+          </div>
+          {/* accuracy chart */}
+          <div style={card}>
+            <h3 style={{ fontSize:'0.9rem', marginBottom:12 }}>Expected accuracy by passes (reference)</h3>
+            {[
+              [1, 87, 'raw single pass'],
+              [3, 99.5, 'HiFi threshold'],
+              [5, 99.9, ''],
+              [10, 99.99, ''],
+              [15, '>99.999', ''],
+            ].map(([n, acc, note])=>(
+              <div key={n} style={{ display:'flex', alignItems:'center', gap:10, marginBottom:6 }}>
+                <span style={{ width:60, fontSize:'0.78rem', color:'#374151' }}>{n} pass{n>1?'es':''}</span>
+                <div style={{ flex:1, background:'#e5e7eb', borderRadius:4, height:14, position:'relative' }}>
+                  <div style={{
+                    width: `${Math.min(parseFloat(acc),100)}%`, height:'100%',
+                    background: n >= 3 ? teal : '#f59e0b', borderRadius:4, transition:'width 0.4s'
+                  }}/>
+                </div>
+                <span style={{ width:60, fontSize:'0.78rem', color:'#374151', textAlign:'right' }}>{acc}%</span>
+                {note && <span style={{ fontSize:'0.72rem', color: teal, fontWeight:700 }}>{note}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Tab 2: Nanopore ───────────────────────────────────────────────────────────
+const ONT_KMER = 5;
+const ONT_TEMPLATE = generateTemplate(13, 40);
+const ONT_KMERS = Array.from({ length: ONT_TEMPLATE.length - ONT_KMER + 1 }, (_, i) =>
+  ONT_TEMPLATE.slice(i, i + ONT_KMER)
+);
+const ONT_LEVELS = ONT_KMERS.map(k => kmerLevel(k));
+
+function NanoporeTab() {
+  const [subTab, setSubTab] = useState('pore');
+  const [step, setStep] = useState(0);
+
+  const maxStep = ONT_KMERS.length - 1;
+  const currentKmer = ONT_KMERS[step];
+  const currentLevel = ONT_LEVELS[step];
+
+  // squiggle path: one horizontal segment per k-mer position
+  const sqW = 540, sqH = 100;
+  const segW = sqW / ONT_KMERS.length;
+  const minL = Math.min(...ONT_LEVELS), maxL = Math.max(...ONT_LEVELS);
+  const scaleY = v => sqH - 10 - ((v - minL) / (maxL - minL + 1)) * (sqH - 20);
+
+  const pathD = ONT_LEVELS.map((l, i) => {
+    const x1 = i * segW, x2 = (i+1) * segW;
+    const y = scaleY(l);
+    const nextY = i < ONT_LEVELS.length - 1 ? scaleY(ONT_LEVELS[i+1]) : y;
+    return `${i===0?'M':'L'}${x1},${y} L${x2-1},${y} L${x2},${nextY}`;
+  }).join(' ');
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+      <div style={{ display:'flex', gap:8 }}>
+        {[['pore','Pore Structure'],['squiggle','Current Squiggle'],['basecall','k-mer Basecalling']].map(([id,label])=>(
+          <button key={id} style={btn(subTab===id)} onClick={()=>setSubTab(id)}>{label}</button>
+        ))}
+      </div>
+
+      {subTab==='pore' && (
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+          <div style={card}>
+            <h3 style={{ fontSize:'0.95rem', marginBottom:12 }}>Nanopore Cross-Section</h3>
+            <svg viewBox="0 0 260 340" width="100%" style={{ maxHeight:340 }}>
+              {/* membrane */}
+              <rect x={0} y={130} width={260} height={40} fill="#fde68a" opacity={0.9}/>
+              <text x={8} y={148} fontSize={8} fill="#92400e" fontFamily="Nunito Sans,sans-serif">Lipid bilayer</text>
+              <text x={8} y={160} fontSize={8} fill="#92400e" fontFamily="Nunito Sans,sans-serif">membrane</text>
+              {/* pore protein */}
+              <path d="M 105,130 L 95,110 L 95,60 L 165,60 L 165,110 L 155,130 Z" fill="#a78bfa" opacity={0.85}/>
+              <path d="M 115,170 L 105,190 L 95,230 L 165,230 L 155,190 L 145,170 Z" fill="#a78bfa" opacity={0.85}/>
+              {/* pore channel */}
+              <rect x={115} y={60} width={30} height={170} fill="#bfdbfe" opacity={0.8}/>
+              {/* constriction / sensing zone */}
+              <rect x={115} y={148} width={30} height={14} fill="#60a5fa" opacity={0.7}/>
+              <line x1={148} y1={155} x2={200} y2={155} stroke="#60a5fa" strokeWidth={1} strokeDasharray="3,2"/>
+              <text x={202} y={158} fontSize={8} fill="#1d4ed8" fontFamily="Nunito Sans,sans-serif">Sensing zone</text>
+              {/* DNA strand */}
+              <line x1={130} y1={0} x2={130} y2={230} stroke="#059669" strokeWidth={3}/>
+              <line x1={125} y1={5} x2={135} y2={5} stroke="#059669" strokeWidth={2}/>
+              <line x1={125} y1={20} x2={135} y2={20} stroke="#059669" strokeWidth={2}/>
+              <line x1={125} y1={35} x2={135} y2={35} stroke="#059669" strokeWidth={2}/>
+              <line x1={125} y1={50} x2={135} y2={50} stroke="#059669" strokeWidth={2}/>
+              <text x={142} y={90} fontSize={8} fill="#059669" fontFamily="Nunito Sans,sans-serif">ssDNA</text>
+              {/* motor protein */}
+              <ellipse cx={130} cy={58} rx={20} ry={10} fill="#f97316" opacity={0.9}/>
+              <text x={130} y={62} textAnchor="middle" fontSize={7} fill="white" fontFamily="Nunito Sans,sans-serif">Motor</text>
+              {/* ions */}
+              <text x={80} y={200} fontSize={9} fill="#2563eb" fontFamily="Nunito Sans,sans-serif">K⁺</text>
+              <text x={80} y={220} fontSize={9} fill="#2563eb" fontFamily="Nunito Sans,sans-serif">Cl⁻</text>
+              <text x={170} y={200} fontSize={9} fill="#2563eb" fontFamily="Nunito Sans,sans-serif">K⁺</text>
+              <text x={170} y={220} fontSize={9} fill="#2563eb" fontFamily="Nunito Sans,sans-serif">Cl⁻</text>
+              {/* voltage label */}
+              <text x={10} y={300} fontSize={8} fill="#374151" fontFamily="Nunito Sans,sans-serif">Applied voltage</text>
+              <text x={10} y={312} fontSize={8} fill="#374151" fontFamily="Nunito Sans,sans-serif">~180 mV → ion flow</text>
+              {/* pore label */}
+              <text x={10} y={100} fontSize={8} fill="#7c3aed" fontFamily="Nunito Sans,sans-serif">Protein pore</text>
+              <text x={10} y={112} fontSize={8} fill="#7c3aed" fontFamily="Nunito Sans,sans-serif">(e.g. MspA, R9)</text>
+              {/* cis / trans */}
+              <text x={220} y={120} fontSize={9} fill="#374151" fontFamily="Nunito Sans,sans-serif" fontWeight="700">cis</text>
+              <text x={220} y={190} fontSize={9} fill="#374151" fontFamily="Nunito Sans,sans-serif" fontWeight="700">trans</text>
+            </svg>
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+            <div style={card}>
+              <h3 style={{ fontSize:'0.9rem', marginBottom:8 }}>How it works</h3>
+              <ol style={{ paddingLeft:18, fontSize:'0.82rem', lineHeight:1.8, color:'#374151' }}>
+                <li>A <strong>protein nanopore</strong> (e.g., MspA, CsgG) is embedded in an artificial lipid bilayer membrane.</li>
+                <li>An <strong>applied voltage</strong> (~180 mV) drives ionic current (K⁺, Cl⁻) through the pore.</li>
+                <li>A <strong>motor protein</strong> (helicase) ratchets single-stranded DNA through the pore one base at a time.</li>
+                <li>Each set of bases in the <strong>sensing zone</strong> partially blocks the current by a characteristic amount — producing a distinct ionic current level.</li>
+                <li>The sequence of current levels is decoded (<strong>basecalled</strong>) into a DNA sequence using a neural network trained on k-mer current models.</li>
+              </ol>
+            </div>
+            <div style={{ ...card, background: tealLight, border:`1px solid ${tealMid}` }}>
+              <h3 style={{ fontSize:'0.85rem', marginBottom:6, color: tealDark }}>Key numbers</h3>
+              <table style={{ fontSize:'0.78rem', borderCollapse:'collapse', width:'100%' }}>
+                <tbody>
+                  {[
+                    ['Read length', 'N50 > 50 kb; ultra-long > 2 Mb'],
+                    ['Raw accuracy', '97–99% (R10 pore)'],
+                    ['Throughput', '~400 Gb / PromethION flow cell'],
+                    ['Sensing zone k-mer', '5-mer (R9) → 9-mer (R10)'],
+                    ['Sample prep', 'Minimal; direct RNA possible'],
+                  ].map(([k,v])=>(
+                    <tr key={k}>
+                      <td style={{ padding:'3px 8px 3px 0', color:'#374151', fontWeight:600 }}>{k}</td>
+                      <td style={{ padding:'3px 0', color:'#374151' }}>{v}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {subTab==='squiggle' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+          <div style={card}>
+            <h3 style={{ fontSize:'0.95rem', marginBottom:8 }}>Ionic Current Squiggle</h3>
+            <p style={{ fontSize:'0.82rem', color:'#6c757d', marginBottom:14 }}>
+              Each position along the trace corresponds to one k-mer ({ONT_KMER}-mer) in the sensing zone.
+              Click or step through to see which k-mer produces which current level.
+            </p>
+            <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap' }}>
+              <button style={btn()} onClick={()=>setStep(s=>Math.max(0,s-1))}>◀ Prev</button>
+              <button style={btn()} onClick={()=>setStep(s=>Math.min(maxStep,s+1))}>Next ▶</button>
+              <button style={btn()} onClick={()=>setStep(0)}>Reset</button>
+              <span style={{ fontSize:'0.82rem', color:'#6c757d', alignSelf:'center' }}>
+                Position: {step + 1} / {ONT_KMERS.length} &nbsp;|&nbsp;
+                k-mer: <span style={{ fontFamily:'monospace', fontWeight:700, color: teal }}>{currentKmer}</span>
+                &nbsp;|&nbsp; level: <span style={{ fontWeight:700, color:'#374151' }}>{currentLevel} pA</span>
+              </span>
+            </div>
+            <svg viewBox={`0 0 ${sqW} ${sqH + 30}`} width="100%" style={{ background:'#f9fafb', borderRadius:6, border:'1px solid #e5e7eb' }}>
+              {/* grid lines */}
+              {[0,0.25,0.5,0.75,1].map(t=>{
+                const y = scaleY(minL + t*(maxL-minL));
+                return <line key={t} x1={0} y1={y} x2={sqW} y2={y} stroke="#e5e7eb" strokeWidth={0.5}/>;
+              })}
+              {/* highlight current segment */}
+              <rect x={step*segW} y={0} width={segW} height={sqH} fill={teal} opacity={0.12}/>
+              {/* squiggle path */}
+              <path d={pathD} stroke="#1d4ed8" strokeWidth={1.8} fill="none"/>
+              {/* highlight dot */}
+              <circle cx={step*segW + segW/2} cy={scaleY(currentLevel)} r={5} fill={teal} stroke="white" strokeWidth={2}/>
+              {/* axis labels */}
+              <text x={4} y={12} fontSize={8} fill="#6b7280" fontFamily="Nunito Sans,sans-serif">{maxL} pA</text>
+              <text x={4} y={sqH-2} fontSize={8} fill="#6b7280" fontFamily="Nunito Sans,sans-serif">{minL} pA</text>
+              <text x={sqW/2} y={sqH+18} textAnchor="middle" fontSize={8} fill="#9ca3af" fontFamily="Nunito Sans,sans-serif">time (k-mer position) →</text>
+            </svg>
+            {/* k-mer sequence bar */}
+            <div style={{ display:'flex', marginTop:6, overflowX:'auto' }}>
+              {ONT_KMERS.map((km,i)=>(
+                <div key={i} onClick={()=>setStep(i)} style={{
+                  minWidth: segW, textAlign:'center', fontSize:'0.65rem',
+                  fontFamily:'monospace', cursor:'pointer', padding:'2px 0',
+                  background: i===step ? tealLight : 'transparent',
+                  color: i===step ? teal : '#9ca3af',
+                  borderBottom: i===step ? `2px solid ${teal}` : '2px solid transparent',
+                  fontWeight: i===step ? 700 : 400,
+                }}>
+                  {km}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={card}>
+            <h3 style={{ fontSize:'0.9rem', marginBottom:8 }}>Raw signal characteristics</h3>
+            <p style={{ fontSize:'0.82rem', color:'#6c757d', lineHeight:1.6 }}>
+              The raw signal is sampled at ~4,000 Hz. Multiple samples map to each base-move event.
+              <strong> Homopolymers</strong> (runs of the same base) produce flat current plateaus that are difficult
+              to count precisely — a known challenge for nanopore basecalling.
+              R10 pores with a longer sensing zone improve homopolymer resolution significantly.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {subTab==='basecall' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+          <div style={card}>
+            <h3 style={{ fontSize:'0.95rem', marginBottom:10 }}>k-mer Current Level Table</h3>
+            <p style={{ fontSize:'0.82rem', color:'#6c757d', marginBottom:12 }}>
+              Each unique {ONT_KMER}-mer produces a characteristic mean ionic current level (pA).
+              Basecallers (e.g., Guppy, Dorado) use neural networks trained on these k-mer models
+              to decode the squiggle signal into a nucleotide sequence. Click a row to highlight it on the squiggle.
+            </p>
+            <div style={{ overflowY:'auto', maxHeight:340, border:'1px solid #e5e7eb', borderRadius:6 }}>
+              <table style={{ borderCollapse:'collapse', width:'100%', fontSize:'0.8rem' }}>
+                <thead style={{ position:'sticky', top:0, background:'#f3f4f6' }}>
+                  <tr>
+                    <th style={{ padding:'6px 12px', textAlign:'left', borderBottom:'1px solid #e5e7eb', fontFamily:"'Nunito',sans-serif" }}>Pos</th>
+                    <th style={{ padding:'6px 12px', textAlign:'left', borderBottom:'1px solid #e5e7eb', fontFamily:"'Nunito',sans-serif" }}>{ONT_KMER}-mer</th>
+                    <th style={{ padding:'6px 12px', textAlign:'right', borderBottom:'1px solid #e5e7eb', fontFamily:"'Nunito',sans-serif" }}>Mean (pA)</th>
+                    <th style={{ padding:'6px 12px', borderBottom:'1px solid #e5e7eb', fontFamily:"'Nunito',sans-serif" }}>Level</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ONT_KMERS.map((km,i)=>{
+                    const lvl = ONT_LEVELS[i];
+                    const norm = (lvl - minL) / (maxL - minL + 1);
+                    const isSelected = i === step;
+                    return (
+                      <tr key={i} onClick={()=>setStep(i)} style={{
+                        background: isSelected ? tealLight : i%2===0 ? '#fafafa' : '#fff',
+                        cursor:'pointer',
+                      }}>
+                        <td style={{ padding:'5px 12px', color:'#6c757d' }}>{i+1}</td>
+                        <td style={{ padding:'5px 12px', fontFamily:'monospace', fontWeight:600, color: teal }}>
+                          {km.split('').map((b,j)=>(
+                            <span key={j} style={{ color: C[b] }}>{b}</span>
+                          ))}
+                        </td>
+                        <td style={{ padding:'5px 12px', textAlign:'right', fontWeight:600 }}>{lvl}</td>
+                        <td style={{ padding:'5px 12px' }}>
+                          <div style={{ background:'#e5e7eb', borderRadius:4, height:8, width:80 }}>
+                            <div style={{ width:`${norm*100}%`, height:'100%', background: teal, borderRadius:4 }}/>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Tab 3: Comparison ─────────────────────────────────────────────────────────
+const TECHS = [
+  {
+    name: 'Sanger',
+    color: '#6366f1',
+    readLen: '700–1000 bp',
+    accuracy: '>99.99%',
+    throughput: 'Very low',
+    cost: 'High per Mb',
+    errorType: 'Very rare; base miscall',
+    applications: 'Targeted validation, clone checking',
+    lengthVal: 900,
+    maxLen: 100000,
+  },
+  {
+    name: 'Illumina\n(short-read)',
+    color: '#f59e0b',
+    readLen: '100–300 bp',
+    accuracy: '>99.9%',
+    throughput: 'Very high',
+    cost: 'Low per Mb',
+    errorType: 'Substitution, 3′ quality drop',
+    applications: 'WGS, RNA-seq, metagenomics',
+    lengthVal: 200,
+    maxLen: 100000,
+  },
+  {
+    name: 'PacBio HiFi\n(long-read)',
+    color: teal,
+    readLen: '10–25 kb',
+    accuracy: '>99.9% (HiFi)',
+    throughput: 'Medium-high',
+    cost: 'Medium per Mb',
+    errorType: 'Rare; CCS corrects raw errors',
+    applications: 'Structural variants, assembly, phasing',
+    lengthVal: 18000,
+    maxLen: 100000,
+  },
+  {
+    name: 'ONT\n(nanopore)',
+    color: '#7c3aed',
+    readLen: 'N50 >50 kb; ultra-long >2 Mb',
+    accuracy: '97–99% (R10)',
+    throughput: 'High',
+    cost: 'Low-medium per Mb',
+    errorType: 'Homopolymer, systematic',
+    applications: 'Ultra-long scaffolding, direct RNA, real-time',
+    lengthVal: 100000,
+    maxLen: 100000,
+  },
+];
+
+function ComparisonTab() {
+  const barMax = Math.max(...TECHS.map(t=>t.lengthVal));
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+      {/* read length visual */}
+      <div style={card}>
+        <h3 style={{ fontSize:'0.95rem', marginBottom:12 }}>Read Length Comparison (log scale)</h3>
+        {TECHS.map(t=>{
+          const logVal = Math.log10(t.lengthVal);
+          const logMax = Math.log10(barMax);
+          const pct = (logVal / logMax) * 100;
+          return (
+            <div key={t.name} style={{ marginBottom:12 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
+                <span style={{ fontSize:'0.82rem', fontWeight:600, whiteSpace:'pre-line' }}>{t.name}</span>
+                <span style={{ fontSize:'0.78rem', color:'#6c757d' }}>{t.readLen}</span>
+              </div>
+              <div style={{ background:'#e5e7eb', borderRadius:6, height:18, position:'relative' }}>
+                <div style={{ width:`${pct}%`, height:'100%', background:t.color, borderRadius:6, transition:'width 0.4s' }}/>
+              </div>
+            </div>
+          );
+        })}
+        <p style={{ fontSize:'0.75rem', color:'#9ca3af', marginTop:4 }}>Bars represent log₁₀ of representative read length.</p>
+      </div>
+
+      {/* full comparison table */}
+      <div style={card}>
+        <h3 style={{ fontSize:'0.95rem', marginBottom:12 }}>Technology Comparison</h3>
+        <div style={{ overflowX:'auto' }}>
+          <table style={{ borderCollapse:'collapse', width:'100%', fontSize:'0.8rem' }}>
+            <thead>
+              <tr style={{ background:'#f3f4f6' }}>
+                <th style={{ padding:'8px 10px', textAlign:'left', borderBottom:'1px solid #dee2e6', fontFamily:"'Nunito',sans-serif" }}>Feature</th>
+                {TECHS.map(t=>(
+                  <th key={t.name} style={{ padding:'8px 10px', textAlign:'center', borderBottom:'1px solid #dee2e6',
+                       fontFamily:"'Nunito',sans-serif", color: t.color, whiteSpace:'pre-line' }}>
+                    {t.name}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ['Read length', 'readLen'],
+                ['Accuracy', 'accuracy'],
+                ['Throughput', 'throughput'],
+                ['Cost per Mb', 'cost'],
+                ['Error type', 'errorType'],
+                ['Key applications', 'applications'],
+              ].map(([label, key], ri)=>(
+                <tr key={key} style={{ background: ri%2===0?'#fafafa':'#fff' }}>
+                  <td style={{ padding:'7px 10px', fontWeight:600, color:'#374151', borderBottom:'1px solid #f3f4f6' }}>{label}</td>
+                  {TECHS.map(t=>(
+                    <td key={t.name} style={{ padding:'7px 10px', textAlign:'center', color:'#374151',
+                                             borderBottom:'1px solid #f3f4f6' }}>
+                      {t[key]}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* use case guide */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:12 }}>
+        {[
+          { q: 'Whole genome assembly?', a: 'ONT ultra-long + Illumina polishing, or PacBio HiFi alone', icon: '🧬' },
+          { q: 'Structural variants (SVs)?', a: 'Long reads required (PacBio or ONT) — short reads miss most SVs', icon: '🔬' },
+          { q: 'RNA isoforms?', a: 'ONT direct RNA or PacBio IsoSeq for full-length transcripts', icon: '🧪' },
+          { q: 'High-throughput WGS?', a: 'Illumina short-read for cost-effective bulk sequencing', icon: '📊' },
+          { q: 'Base modifications?', a: 'ONT (direct detection) or PacBio (IPD-based kinetics)', icon: '⚗️' },
+          { q: 'Point mutation validation?', a: 'Sanger sequencing remains gold standard for targeted sites', icon: '🎯' },
+        ].map(({ q, a, icon }) => (
+          <div key={q} style={{ ...card, background: tealLight, border:`1px solid ${tealMid}` }}>
+            <div style={{ fontSize:'1.4rem', marginBottom:6 }}>{icon}</div>
+            <div style={{ fontSize:'0.8rem', fontWeight:700, color: tealDark, marginBottom:4 }}>{q}</div>
+            <div style={{ fontSize:'0.78rem', color:'#374151', lineHeight:1.5 }}>{a}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App() {
+  const [tab, setTab] = useState('pacbio');
+
+  const TABS = [
+    { id: 'pacbio', label: '🔴 PacBio SMRT' },
+    { id: 'nanopore', label: '🟣 Oxford Nanopore' },
+    { id: 'compare', label: '📊 Comparison' },
+  ];
+
+  return (
+    <div style={{ background:'#f8f9fa', minHeight:'100vh', fontFamily:"'Nunito Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
+      <div style={{ maxWidth:900, margin:'0 auto', padding:'60px 20px 40px' }}>
+        <h1 style={{ fontFamily:"'Nunito', system-ui, sans-serif", fontSize:'1.9rem', fontWeight:700,
+                     color: teal, marginBottom:6, textAlign:'center' }}>
+          Long-Read Sequencing
+        </h1>
+        <p style={{ color:'#6c757d', textAlign:'center', marginBottom:28, fontSize:'0.9rem' }}>
+          BSB511 / BENG451 — PacBio SMRT &amp; Oxford Nanopore Technologies
+        </p>
+
+        {/* tabs */}
+        <div style={{ display:'flex', gap:8, marginBottom:20, borderBottom:`2px solid ${tealMid}`, paddingBottom:0, flexWrap:'wrap' }}>
+          {TABS.map(t=>(
+            <button key={t.id} onClick={()=>setTab(t.id)} style={{
+              ...btn(tab===t.id),
+              borderBottom: tab===t.id ? `2px solid ${teal}` : '2px solid transparent',
+              borderRadius:'6px 6px 0 0',
+              marginBottom:-2,
+              fontFamily:"'Nunito', sans-serif",
+            }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {tab==='pacbio'   && <PacbioTab/>}
+        {tab==='nanopore' && <NanoporeTab/>}
+        {tab==='compare'  && <ComparisonTab/>}
+
+        <div style={{ marginTop:32, textAlign:'center', fontSize:'0.75rem', color:'#9ca3af',
+                      borderTop:`1px solid ${tealMid}`, paddingTop:16 }}>
+          BSB511 / BENG451 — Bioinformatics Fundamentals — 2025-2026 Spring Semester
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
