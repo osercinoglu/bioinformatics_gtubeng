@@ -5,18 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Sequence Motif Finder — BSB511 / BENG451</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Nunito+Sans:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 0; }
+    body { margin: 0; padding: 0; font-family: 'Nunito Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    h1, h2, h3, h4, h5, h6 { font-family: 'Nunito', system-ui, sans-serif; }
     .back-link {
       position: fixed; top: 12px; left: 12px; z-index: 1000;
       padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 700;
-      background: rgba(15,23,42,0.85); color: #94A3B8; text-decoration: none;
-      border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(8px);
-      font-family: 'Inter', sans-serif; transition: all 0.2s;
+      background: white; color: #2a7f8a; text-decoration: none;
+      border: 1px solid #b8dce2; font-family: 'Nunito Sans', sans-serif; transition: all 0.2s ease-in-out;
     }
-    .back-link:hover { color: #E2E8F0; border-color: rgba(255,255,255,0.3); }
+    .back-link:hover { background: #e8f4f6; color: #1e5f6a; border-color: #2a7f8a; }
   </style>
 </head>
 <body>
@@ -177,7 +177,7 @@
       { bg: "#DBEAFE", border: "#3B82F6", text: "#1E3A8A" },
       { bg: "#D1FAE5", border: "#10B981", text: "#065F46" },
       { bg: "#FCE7F3", border: "#EC4899", text: "#831843" },
-      { bg: "#E0E7FF", border: "#6366F1", text: "#312E81" },
+      { bg: "#E0E7FF", border: "#2a7f8a", text: "#312E81" },
       { bg: "#FED7AA", border: "#F97316", text: "#7C2D12" },
       { bg: "#CCFBF1", border: "#14B8A6", text: "#134E4A" },
       { bg: "#FECDD3", border: "#F43F5E", text: "#881337" },
@@ -265,9 +265,9 @@
                   style={{
                     padding: "6px 12px", fontSize: 11, fontWeight: 600, borderRadius: 8,
                     cursor: "pointer", transition: "all 0.15s",
-                    border: isActive ? `2px solid ${color?.border || "#6366F1"}` : "1px solid #E2E8F0",
-                    background: isActive ? (color?.bg || "#EEF2FF") : "white",
-                    color: isActive ? (color?.text || "#4338CA") : "#64748B"
+                    border: isActive ? `2px solid ${color?.border || "#2a7f8a"}` : "1px solid #E2E8F0",
+                    background: isActive ? (color?.bg || "#e8f4f6") : "white",
+                    color: isActive ? (color?.text || "#2a7f8a") : "#64748B"
                   }}
                   title={motif.description}
                 >
@@ -305,7 +305,7 @@
                 <tr key={i}>
                   <td style={{
                     padding: "2px 10px 2px 0", fontFamily: "monospace", fontWeight: 700,
-                    color: "#6366F1", whiteSpace: "nowrap", verticalAlign: "top"
+                    color: "#2a7f8a", whiteSpace: "nowrap", verticalAlign: "top"
                   }}>{notation}</td>
                   <td style={{ padding: "2px 0", color: "#475569" }}>{meaning}</td>
                 </tr>
@@ -313,7 +313,7 @@
             </tbody>
           </table>
           <div style={{ marginTop: 8, color: "#64748B", fontSize: 11 }}>
-            Example: <span style={{ fontFamily: "monospace", color: "#6366F1", fontWeight: 600 }}>N-{"{P}"}-[ST]-{"{P}"}</span> matches Asn, any-except-Pro, Ser-or-Thr, any-except-Pro → N-glycosylation site (PS00001)
+            Example: <span style={{ fontFamily: "monospace", color: "#2a7f8a", fontWeight: 600 }}>N-{"{P}"}-[ST]-{"{P}"}</span> matches Asn, any-except-Pro, Ser-or-Thr, any-except-Pro → N-glycosylation site (PS00001)
           </div>
         </div>
       );
@@ -403,9 +403,9 @@
     
       return (
         <div style={{
-          fontFamily: "'Inter', -apple-system, sans-serif",
+          fontFamily: "'Nunito Sans', -apple-system, sans-serif",
           maxWidth: 920, margin: "0 auto", padding: 20,
-          background: "linear-gradient(135deg, #FDF4FF 0%, #EFF6FF 100%)",
+          background: "#f8f9fa",
           minHeight: "100vh"
         }}>
           {/* Header */}
@@ -440,9 +440,9 @@
                     }}
                     style={{
                       padding: "4px 10px", fontSize: 11, borderRadius: 6, cursor: "pointer",
-                      border: selectedExample === name ? "2px solid #7C3AED" : "1px solid #E2E8F0",
-                      background: selectedExample === name ? "#F5F3FF" : "white",
-                      color: selectedExample === name ? "#6D28D9" : "#64748B", fontWeight: 600
+                      border: selectedExample === name ? "2px solid #2a7f8a" : "1px solid #E2E8F0",
+                      background: selectedExample === name ? "#e8f4f6" : "white",
+                      color: selectedExample === name ? "#2a7f8a" : "#64748B", fontWeight: 600
                     }}
                   >{name}</button>
                 ))}
@@ -462,15 +462,15 @@
             />
             <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: 12, color: "#64748B", flexWrap: "wrap", alignItems: "center" }}>
               {parsed.header && (
-                <span style={{ color: "#7C3AED", fontWeight: 600 }} title={parsed.header}>
+                <span style={{ color: "#2a7f8a", fontWeight: 600 }} title={parsed.header}>
                   {parsed.header.length > 60 ? parsed.header.substring(0, 57) + "…" : parsed.header}
                 </span>
               )}
               <span><strong>{parsed.seq.length}</strong> {seqType === "dna" ? "nucleotides" : "residues"}</span>
               <span style={{
                 padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 700,
-                background: seqType === "dna" ? "#DBEAFE" : "#F5F3FF",
-                color: seqType === "dna" ? "#1E40AF" : "#6D28D9"
+                background: seqType === "dna" ? "#DBEAFE" : "#e8f4f6",
+                color: seqType === "dna" ? "#1E40AF" : "#2a7f8a"
               }}>
                 {seqType === "dna" ? "DNA" : "PROTEIN"}
               </span>
@@ -519,15 +519,15 @@
                   {[["prosite", "PROSITE"], ["regex", "Regex"]].map(([id, label]) => (
                     <button key={id} onClick={() => setCustomIsProsite(id === "prosite")} style={{
                       padding: "8px 10px", fontSize: 11, fontWeight: 600, borderRadius: 6, cursor: "pointer",
-                      border: (customIsProsite ? "prosite" : "regex") === id ? "2px solid #6366F1" : "1px solid #E2E8F0",
-                      background: (customIsProsite ? "prosite" : "regex") === id ? "#EEF2FF" : "white",
-                      color: (customIsProsite ? "prosite" : "regex") === id ? "#4338CA" : "#94A3B8"
+                      border: (customIsProsite ? "prosite" : "regex") === id ? "2px solid #2a7f8a" : "1px solid #E2E8F0",
+                      background: (customIsProsite ? "prosite" : "regex") === id ? "#e8f4f6" : "white",
+                      color: (customIsProsite ? "prosite" : "regex") === id ? "#2a7f8a" : "#94A3B8"
                     }}>{label}</button>
                   ))}
                 </div>
                 <button onClick={addCustomPattern} disabled={!customPattern.trim()} style={{
                   padding: "8px 16px", fontSize: 12, fontWeight: 700, borderRadius: 8,
-                  border: "none", background: customPattern.trim() ? "#6366F1" : "#CBD5E1",
+                  border: "none", background: customPattern.trim() ? "#2a7f8a" : "#CBD5E1",
                   color: "white", cursor: customPattern.trim() ? "pointer" : "default"
                 }}>+ Add</button>
               </div>
@@ -535,8 +535,8 @@
               <div style={{ marginTop: 8 }}>
                 <button onClick={() => setShowProsite(!showProsite)} style={{
                   padding: "4px 10px", fontSize: 11, borderRadius: 6, cursor: "pointer",
-                  border: "1px solid #E2E8F0", background: showProsite ? "#F5F3FF" : "white",
-                  color: showProsite ? "#6D28D9" : "#94A3B8", fontWeight: 600
+                  border: "1px solid #E2E8F0", background: showProsite ? "#e8f4f6" : "white",
+                  color: showProsite ? "#2a7f8a" : "#94A3B8", fontWeight: 600
                 }}>
                   {showProsite ? "Hide" : "Show"} PROSITE notation help
                 </button>
@@ -553,7 +553,7 @@
             }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>
-                  Active Motifs — <span style={{ color: "#6366F1" }}>{totalMatches} total matches</span>
+                  Active Motifs — <span style={{ color: "#2a7f8a" }}>{totalMatches} total matches</span>
                 </div>
                 <button onClick={() => setActiveMotifs([])} style={{
                   padding: "4px 12px", fontSize: 11, borderRadius: 6, cursor: "pointer",
@@ -600,7 +600,7 @@
                           {motif.description}
                         </div>
                         <div style={{ fontSize: 11, fontFamily: "monospace", color: "#94A3B8", marginTop: 4 }}>
-                          {motif.prosite && <span>PROSITE: <strong style={{ color: "#6366F1" }}>{motif.prosite}</strong> → </span>}
+                          {motif.prosite && <span>PROSITE: <strong style={{ color: "#2a7f8a" }}>{motif.prosite}</strong> → </span>}
                           Regex: <strong style={{ color: "#334155" }}>{result.regex}</strong>
                         </div>
                         {result.error && (
@@ -664,7 +664,7 @@
               </h3>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
                 <div style={{ background: "#F8FAFC", borderRadius: 8, padding: 14, textAlign: "center" }}>
-                  <div style={{ fontSize: 28, fontWeight: 800, color: "#6366F1" }}>{totalMatches}</div>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: "#2a7f8a" }}>{totalMatches}</div>
                   <div style={{ fontSize: 11, color: "#64748B" }}>Total matches</div>
                 </div>
                 <div style={{ background: "#F8FAFC", borderRadius: 8, padding: 14, textAlign: "center" }}>

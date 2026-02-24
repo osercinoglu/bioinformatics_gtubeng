@@ -5,18 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Phylogenetic Tree Interpreter — BSB511 / BENG451</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Nunito+Sans:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 0; }
+    body { margin: 0; padding: 0; font-family: 'Nunito Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    h1, h2, h3, h4, h5, h6 { font-family: 'Nunito', system-ui, sans-serif; }
     .back-link {
       position: fixed; top: 12px; left: 12px; z-index: 1000;
       padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 700;
-      background: rgba(15,23,42,0.85); color: #94A3B8; text-decoration: none;
-      border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(8px);
-      font-family: 'Inter', sans-serif; transition: all 0.2s;
+      background: white; color: #2a7f8a; text-decoration: none;
+      border: 1px solid #b8dce2; font-family: 'Nunito Sans', sans-serif; transition: all 0.2s ease-in-out;
     }
-    .back-link:hover { color: #E2E8F0; border-color: rgba(255,255,255,0.3); }
+    .back-link:hover { background: #e8f4f6; color: #1e5f6a; border-color: #2a7f8a; }
   </style>
 </head>
 <body>
@@ -348,7 +348,7 @@
               return <line key={i} x1={el.x} y1={el.y1} x2={el.x} y2={el.y2} stroke="#475569" strokeWidth={2} />;
             }
             if (el.type === "node") {
-              return <circle key={i} cx={el.x} cy={el.y} r={3} fill="#6366F1" />;
+              return <circle key={i} cx={el.x} cy={el.y} r={3} fill="#2a7f8a" />;
             }
             if (el.type === "label") {
               return (
@@ -374,7 +374,7 @@
                 <th style={{ padding: "4px 8px", color: "#94A3B8" }}></th>
                 {labels.map((l, j) => (
                   <th key={j} style={{
-                    padding: "4px 8px", fontWeight: 700, color: "#4338CA", textAlign: "center",
+                    padding: "4px 8px", fontWeight: 700, color: "#2a7f8a", textAlign: "center",
                     maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
                   }}>{l.length > 8 ? l.substring(0, 7) + "…" : l}</th>
                 ))}
@@ -444,7 +444,7 @@
                         style={{
                           width: 72, padding: "4px 6px", fontSize: 12, fontWeight: 700,
                           border: "1px solid #E2E8F0", borderRadius: 4, textAlign: "center",
-                          color: "#4338CA", fontFamily: "monospace"
+                          color: "#2a7f8a", fontFamily: "monospace"
                         }}
                       />
                     </th>
@@ -582,9 +582,9 @@
     
       return (
         <div style={{
-          fontFamily: "'Inter', -apple-system, sans-serif",
+          fontFamily: "'Nunito Sans', -apple-system, sans-serif",
           maxWidth: 940, margin: "0 auto", padding: 20,
-          background: "linear-gradient(135deg, #FFFBEB 0%, #F0FDF4 100%)",
+          background: "#f8f9fa",
           minHeight: "100vh"
         }}>
           {/* Header */}
@@ -638,9 +638,9 @@
                 <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 6 }}>MATRIX</label>
                 <button onClick={() => { setEditMode(!editMode); resetSteps(); }} style={{
                   padding: "6px 14px", fontSize: 11, borderRadius: 6, cursor: "pointer",
-                  border: editMode ? "2px solid #6366F1" : "1px solid #E2E8F0",
-                  background: editMode ? "#EEF2FF" : "white",
-                  color: editMode ? "#4338CA" : "#64748B", fontWeight: 600
+                  border: editMode ? "2px solid #2a7f8a" : "1px solid #E2E8F0",
+                  background: editMode ? "#e8f4f6" : "white",
+                  color: editMode ? "#2a7f8a" : "#64748B", fontWeight: 600
                 }}>{editMode ? "Done Editing" : "✎ Edit Matrix"}</button>
               </div>
             </div>
@@ -718,7 +718,7 @@
               }}>
                 <span style={{
                   fontSize: 12, fontWeight: 700, color: "white",
-                  background: algo === "upgma" ? "#059669" : "#6366F1",
+                  background: algo === "upgma" ? "#059669" : "#2a7f8a",
                   padding: "4px 10px", borderRadius: 6
                 }}>
                   STEP {currentStep + 1}
@@ -726,7 +726,7 @@
                 <span style={{ fontSize: 14, fontWeight: 700, color: "#1E293B" }}>
                   Merge: <span style={{ color: "#059669", fontFamily: "monospace" }}>{step.merged[0]}</span>
                   {" "}&amp;{" "}
-                  <span style={{ color: "#7C3AED", fontFamily: "monospace" }}>{step.merged[1]}</span>
+                  <span style={{ color: "#2a7f8a", fontFamily: "monospace" }}>{step.merged[1]}</span>
                 </span>
               </div>
     
@@ -746,8 +746,8 @@
               {algo === "nj" && (
                 <div style={{ marginBottom: 14 }}>
                   <div style={{
-                    background: "#EEF2FF", borderRadius: 8, padding: 12,
-                    fontSize: 13, color: "#312E81", fontFamily: "monospace", lineHeight: 1.8
+                    background: "#e8f4f6", borderRadius: 8, padding: 12,
+                    fontSize: 13, color: "#1e5f6a", fontFamily: "monospace", lineHeight: 1.8
                   }}>
                     <div>Minimum Q value = <strong>{step.minQ.toFixed(2)}</strong></div>
                     <div>
@@ -767,7 +767,7 @@
                             <tr>
                               <th style={{ padding: "3px 6px" }}></th>
                               {step.clusterLabels.map((l, j) => (
-                                <th key={j} style={{ padding: "3px 6px", color: "#6366F1", fontWeight: 700, textAlign: "center" }}>
+                                <th key={j} style={{ padding: "3px 6px", color: "#2a7f8a", fontWeight: 700, textAlign: "center" }}>
                                   {l.length > 7 ? l.substring(0, 6) + "…" : l}
                                 </th>
                               ))}
@@ -871,7 +871,7 @@
                 </p>
               </div>
               <div>
-                <div style={{ fontWeight: 700, color: "#6366F1", marginBottom: 4 }}>Neighbor-Joining</div>
+                <div style={{ fontWeight: 700, color: "#2a7f8a", marginBottom: 4 }}>Neighbor-Joining</div>
                 <p style={{ margin: 0 }}>
                   Produces an unrooted, additive tree. Does <em>not</em> assume a molecular clock — different lineages can evolve at different rates.
                   Uses a Q-matrix correction that accounts for divergence from all other taxa, not just pairwise distance. Generally preferred for real-world molecular data.
