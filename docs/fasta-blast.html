@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FASTA &amp; BLAST Simulator — BSB511 / BENG451</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Nunito+Sans:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; font-family: 'Nunito Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    h1, h2, h3, h4, h5, h6 { font-family: 'Nunito', system-ui, sans-serif; }
+    .back-link {
+      position: fixed; top: 12px; left: 12px; z-index: 1000;
+      padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 700;
+      background: white; color: #2a7f8a; text-decoration: none;
+      border: 1px solid #b8dce2; font-family: 'Nunito Sans', sans-serif; transition: all 0.2s ease-in-out;
+    }
+    .back-link:hover { background: #e8f4f6; color: #1e5f6a; border-color: #2a7f8a; }
+  </style>
+</head>
+<body>
+  <a href="index.html" class="back-link">← All Widgets</a>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useMemo } = React;
+
+    // ─── Example sequences ───────────────────────────────────────────────────
+    const EXAMPLES = [
+      {
+        label: "Classic (Pearson 1988)",
+        query:   "HEAGAWGHEE",
+        subject: "PAWHEAE",
+        note: "Query from the original FASTA paper. Try ktup=2 to see the best diagonal."
+      },
+      {
+        label: "Globin fragments",
+        query:   "ACDEFGHIKLM",
+        subject: "ACDFFGHIILM",
+        note: "Two similar protein fragments — one substitution and one insertion."
+      },
+      {
+        label: "DNA similarity",
+        query:   "ATCGATCGAA",
+        subject: "GGATCGATCC",
+        note: "Short DNA sequences sharing a common sub-segment."
+      },
+      {
+        label: "No similarity",
+        query:   "HEAGAWGHEE",
+        subject: "MRKLPTVWND",
+        note: "Unrelated sequences — expect few k-tuple hits and no significant HSP."
+      },
+    ];
+
+    // ─── FASTA: find k-tuple hits and score diagonals ────────────────────────
+    function runFasta(query, subject, ktup) {
+      const diagMap = {};
+      for (let qi = 0; qi <= query.length - ktup; qi++) {
+        const kw = query.slice(qi, qi + ktup);
+        for (let si = 0; si <= subject.length - ktup; si++) {
+          if (subject.slice(si, si + ktup) === kw) {
+            const d = qi - si;
+            if (!diagMap[d]) diagMap[d] = { matches: [], score: 0 };
+            diagMap[d].matches.push({ qi, si, kw });
+            diagMap[d].score += ktup;
+          }
+        }
+      }
+      const ranked = Object.entries(diagMap)
+        .map(([d, v]) => ({ diag: parseInt(d), ...v }))
+        .sort((a, b) => b.score - a.score);
+      return { diagMap, ranked };
+    }
+
+    // ─── BLAST: word seeding + ungapped extension ────────────────────────────
+    function runBlast(query, subject, W) {
+      // Generate all words from query
+      const words = [];
+      for (let i = 0; i <= query.length - W; i++) {
+        words.push({ word: query.slice(i, i + W), qpos: i });
+      }
+      // Find exact seeds in subject
+      const seeds = [];
+      words.forEach(({ word, qpos }) => {
+        for (let j = 0; j <= subject.length - W; j++) {
+          if (subject.slice(j, j + W) === word) {
+            seeds.push({ word, qpos, spos: j });
+          }
+        }
+      });
+      // Extend each seed (ungapped) — drop off if cumulative score < 0
+      const hsps = seeds.map(seed => {
+        let score = W; // exact match gives W points
+        let ql = seed.qpos, sl = seed.spos;
+        let qr = seed.qpos + W - 1, sr = seed.spos + W - 1;
+        // extend right
+        while (qr + 1 < query.length && sr + 1 < subject.length) {
+          const delta = query[qr + 1] === subject[sr + 1] ? 1 : -1;
+          if (score + delta < 0) break;
+          score += delta; qr++; sr++;
+        }
+        // extend left
+        while (ql - 1 >= 0 && sl - 1 >= 0) {
+          const delta = query[ql - 1] === subject[sl - 1] ? 1 : -1;
+          if (score + delta < 0) break;
+          score += delta; ql--; sl--;
+        }
+        return { qstart: ql, qend: qr, sstart: sl, send: sr, score, seed };
+      });
+      // Deduplicate by (qstart, sstart)
+      const seen = new Set();
+      const unique = hsps.filter(h => {
+        const k = `${h.qstart},${h.sstart}`;
+        if (seen.has(k)) return false;
+        seen.add(k); return true;
+      }).sort((a, b) => b.score - a.score);
+      return { words, seeds, hsps: unique };
+    }
+
+    // ─── E-value (Karlin-Altschul, simplified) ──────────────────────────────
+    function evalue(score, m, n) {
+      const K = 0.041, lam = 0.267;
+      return K * m * n * Math.exp(-lam * score);
+    }
+
+    // ─── Dot-plot grid ───────────────────────────────────────────────────────
+    function DotPlot({ query, subject, ktup, diagMap, bestDiag, showBand }) {
+      const Q = query.length, S = subject.length;
+      const cell = Math.min(34, Math.floor(340 / Math.max(Q, S)));
+      // build hit sets
+      const allHits = new Set();
+      const bestHits = new Set();
+      Object.entries(diagMap).forEach(([d, { matches }]) => {
+        const isBest = parseInt(d) === bestDiag;
+        matches.forEach(({ qi, si }) => {
+          for (let k = 0; k < ktup; k++) {
+            allHits.add(`${qi+k},${si+k}`);
+            if (isBest) bestHits.add(`${qi+k},${si+k}`);
+          }
+        });
+      });
+      const bandWidth = 2;
+      return (
+        <div style={{ overflowX: "auto", textAlign: "center" }}>
+          <table style={{ borderCollapse: "collapse", display: "inline-table" }}>
+            <thead>
+              <tr>
+                <td style={{ width: cell, height: cell }} />
+                {subject.split("").map((c, j) => (
+                  <td key={j} style={{ width: cell, height: cell, textAlign: "center",
+                    fontSize: cell * 0.48, fontFamily: "monospace", fontWeight: 700, color: "#2a7f8a" }}>{c}</td>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {query.split("").map((qc, i) => (
+                <tr key={i}>
+                  <td style={{ width: cell, height: cell, textAlign: "center",
+                    fontSize: cell * 0.48, fontFamily: "monospace", fontWeight: 700, color: "#059669" }}>{qc}</td>
+                  {subject.split("").map((sc, j) => {
+                    const key = `${i},${j}`;
+                    const isMatch = qc === sc;
+                    const isBest = bestHits.has(key);
+                    const isOther = allHits.has(key) && !isBest;
+                    const onBand = showBand && bestDiag !== null &&
+                      Math.abs((i - j) - bestDiag) <= bandWidth;
+                    return (
+                      <td key={j} style={{
+                        width: cell, height: cell, textAlign: "center",
+                        fontSize: cell * 0.5, border: "1px solid #e9ecef",
+                        background: isBest ? "#2a7f8a" : isOther ? "#b8dce2"
+                          : onBand ? "#f0fafa" : "white",
+                        color: isBest ? "white" : isOther ? "#1e5f6a" : "#ccc",
+                        fontWeight: (isBest || isOther) ? 700 : 400,
+                        fontFamily: "monospace",
+                      }}>
+                        {isMatch ? "•" : ""}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ fontSize: 11, color: "#6c757d", marginTop: 6 }}>
+            Rows = query · Cols = subject ·{" "}
+            <span style={{ color: "#2a7f8a", fontWeight: 700 }}>■ best diagonal</span>
+            {" · "}<span style={{ color: "#b8dce2", fontWeight: 700 }}>■ other k-tuple hits</span>
+            {showBand && bestDiag !== null && <span style={{ color: "#2a7f8a" }}> · shaded = band (±{bandWidth})</span>}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Main App ────────────────────────────────────────────────────────────
+    function App() {
+      const [algo, setAlgo] = useState("fasta");
+      const [exIdx, setExIdx] = useState(0);
+      const [customQuery, setCustomQuery] = useState("");
+      const [customSubj, setCustomSubj] = useState("");
+      const [useCustom, setUseCustom] = useState(false);
+      const [ktup, setKtup] = useState(2);
+      const [wordSize, setWordSize] = useState(3);
+      const [fastaStep, setFastaStep] = useState(1);
+      const [blastStep, setBlastStep] = useState(1);
+      const [selHsp, setSelHsp] = useState(0);
+
+      const ex = EXAMPLES[exIdx];
+      const query = (useCustom ? customQuery : ex.query).toUpperCase().replace(/[^A-Z*]/g, "");
+      const subject = (useCustom ? customSubj : ex.subject).toUpperCase().replace(/[^A-Z*]/g, "");
+
+      const fastaRes = useMemo(() => runFasta(query, subject, ktup), [query, subject, ktup]);
+      const blastRes = useMemo(() => runBlast(query, subject, wordSize), [query, subject, wordSize]);
+
+      const bestDiag = fastaRes.ranked[0]?.diag ?? null;
+
+      // ── shared style helpers ──────────────────────────────────────────────
+      const card = {
+        background: "white", borderRadius: 8, padding: 20,
+        marginBottom: 16, border: "1px solid #dee2e6",
+      };
+      const btn = (active, small) => ({
+        padding: small ? "4px 10px" : "6px 14px",
+        fontSize: small ? 11 : 12, borderRadius: 6, cursor: "pointer",
+        border: active ? "2px solid #2a7f8a" : "1px solid #dee2e6",
+        background: active ? "#e8f4f6" : "white",
+        color: active ? "#2a7f8a" : "#6c757d",
+        fontWeight: 600, transition: "all 0.15s",
+      });
+      const tabBtn = (active) => ({
+        flex: 1, padding: "8px 4px", fontSize: 11, fontWeight: 700,
+        cursor: "pointer", border: "none",
+        background: active ? "#2a7f8a" : "white",
+        color: active ? "white" : "#6c757d",
+      });
+      const info = { fontSize: 13, color: "#495057", lineHeight: 1.7, marginBottom: 12 };
+      const chip = (color) => ({
+        display: "inline-block", background: color || "#e8f4f6",
+        borderRadius: 6, padding: "5px 12px", fontSize: 12, marginRight: 6, marginTop: 6,
+      });
+
+      return (
+        <div style={{
+          fontFamily: "'Nunito Sans', -apple-system, sans-serif",
+          minHeight: "100vh", background: "#f8f9fa", paddingBottom: 40,
+        }}>
+          {/* ── Header ── */}
+          <div style={{ textAlign: "center", padding: "52px 20px 20px" }}>
+            <h1 style={{ fontSize: 24, fontWeight: 700, color: "#2a7f8a", margin: 0 }}>
+              🔎 FASTA &amp; BLAST Simulator
+            </h1>
+            <p style={{ fontSize: 13, color: "#6c757d", margin: "6px 0 0" }}>
+              Heuristic sequence database search algorithms — BSB511 / BENG451
+            </p>
+          </div>
+
+          <div style={{ maxWidth: 860, margin: "0 auto", padding: "0 16px" }}>
+
+            {/* ── Algorithm tabs ── */}
+            <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+              {["fasta", "blast"].map(a => (
+                <button key={a} onClick={() => setAlgo(a)} style={{
+                  ...btn(algo === a), fontSize: 14, fontWeight: 700, padding: "8px 24px",
+                }}>
+                  {a === "fasta" ? "FASTA" : "BLAST"}
+                </button>
+              ))}
+            </div>
+
+            {/* ── Sequence panel ── */}
+            <div style={card}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6c757d", marginBottom: 4, textTransform: "uppercase" }}>Example</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {EXAMPLES.map((e, i) => (
+                      <button key={i} style={btn(exIdx === i && !useCustom, true)}
+                        onClick={() => { setExIdx(i); setUseCustom(false); setFastaStep(1); setBlastStep(1); }}>
+                        {e.label}
+                      </button>
+                    ))}
+                    <button style={btn(useCustom, true)} onClick={() => {
+                      setUseCustom(true);
+                      if (!customQuery) setCustomQuery(ex.query);
+                      if (!customSubj) setCustomSubj(ex.subject);
+                    }}>Custom</button>
+                  </div>
+                </div>
+              </div>
+
+              {useCustom ? (
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  {[["Query", customQuery, setCustomQuery], ["Subject", customSubj, setCustomSubj]].map(([lbl, val, set]) => (
+                    <div key={lbl} style={{ flex: 1, minWidth: 180 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#6c757d", marginBottom: 4 }}>{lbl.toUpperCase()}</div>
+                      <input value={val} onChange={e => set(e.target.value)}
+                        style={{ width: "100%", padding: "6px 10px", fontFamily: "monospace", fontSize: 14,
+                          border: "1px solid #dee2e6", borderRadius: 6, letterSpacing: 1.5, fontWeight: 700,
+                          color: lbl === "Query" ? "#059669" : "#2a7f8a", outline: "none" }} />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  {[["Query", query, "#059669"], ["Subject", subject, "#2a7f8a"]].map(([lbl, seq, col]) => (
+                    <div key={lbl} style={{ flex: 1, minWidth: 180 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#6c757d", marginBottom: 4 }}>{lbl.toUpperCase()}</div>
+                      <div style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, letterSpacing: 1.5,
+                        color: col, background: "#f8f9fa", padding: "6px 10px", borderRadius: 6,
+                        border: "1px solid #dee2e6", wordBreak: "break-all" }}>{seq}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!useCustom && (
+                <div style={{ marginTop: 10, fontSize: 12, color: "#6c757d", fontStyle: "italic" }}>{ex.note}</div>
+              )}
+            </div>
+
+            {/* ════════════════════ FASTA PANEL ════════════════════ */}
+            {algo === "fasta" && (
+              <div>
+                <div style={card}>
+                  {/* ktup selector + step nav */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#6c757d" }}>ktup =</span>
+                      {[1, 2, 3].map(k => (
+                        <button key={k} style={btn(ktup === k, true)} onClick={() => setKtup(k)}>{k}</button>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#6c757d" }}>
+                      smaller ktup → more sensitive · larger ktup → faster
+                    </div>
+                  </div>
+
+                  {/* Step tabs */}
+                  <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1px solid #dee2e6", marginBottom: 18 }}>
+                    {[
+                      { n: 1, label: "① K-tuple hits" },
+                      { n: 2, label: "② Diagonal scoring" },
+                      { n: 3, label: "③ Band alignment" },
+                    ].map((s, i, arr) => (
+                      <button key={s.n} onClick={() => setFastaStep(s.n)} style={{
+                        ...tabBtn(fastaStep === s.n),
+                        borderRight: i < arr.length - 1 ? "1px solid #dee2e6" : "none",
+                      }}>{s.label}</button>
+                    ))}
+                  </div>
+
+                  {/* ── Step 1: K-tuple hits ── */}
+                  {fastaStep === 1 && (
+                    <div>
+                      <p style={info}>
+                        FASTA starts by building a <strong>hash table</strong> of all k-letter words (k-tuples) found in the query.
+                        It then scans the subject sequence once, recording every position where an <em>exact</em> k-tuple match occurs.
+                        Each match corresponds to a point on the <strong>dot plot</strong> below.
+                      </p>
+                      <DotPlot query={query} subject={subject} ktup={ktup}
+                        diagMap={fastaRes.diagMap} bestDiag={null} showBand={false} />
+                      <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap" }}>
+                        <span style={chip()}>
+                          <strong>ktup = {ktup}</strong>
+                        </span>
+                        <span style={chip()}>
+                          <strong>{Object.values(fastaRes.diagMap).reduce((s, d) => s + d.matches.length, 0)}</strong> k-tuple hits
+                        </span>
+                        <span style={chip()}>
+                          <strong>{Object.keys(fastaRes.diagMap).length}</strong> diagonals occupied
+                        </span>
+                      </div>
+                      {Object.keys(fastaRes.diagMap).length === 0 && (
+                        <div style={{ marginTop: 10, background: "#fff3cd", borderRadius: 6, padding: "8px 14px", fontSize: 12, color: "#856404" }}>
+                          No exact {ktup}-tuple matches found. Try reducing ktup to 1.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Step 2: Diagonal scoring ── */}
+                  {fastaStep === 2 && (
+                    <div>
+                      <p style={info}>
+                        Matches that fall on the <strong>same diagonal</strong> (same value of query-position − subject-position)
+                        represent a consistent reading-frame offset. FASTA sums k-tuple hits per diagonal to get an <em>init1</em> score.
+                        The best-scoring diagonal is selected for further processing.
+                      </p>
+                      {fastaRes.ranked.length > 0 ? (
+                        <div style={{ overflowX: "auto" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                            <thead>
+                              <tr style={{ background: "#f8f9fa" }}>
+                                {["Diagonal (qi−si)", "Hits", "Score", "Positions (Q↔S)"].map(h => (
+                                  <th key={h} style={{ padding: "6px 10px", borderBottom: "2px solid #dee2e6", textAlign: "left", fontWeight: 700 }}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {fastaRes.ranked.map((row, i) => (
+                                <tr key={row.diag} style={{ background: i === 0 ? "#e8f4f6" : "white" }}>
+                                  <td style={{ padding: "5px 10px", borderBottom: "1px solid #dee2e6",
+                                    fontFamily: "monospace", fontWeight: i === 0 ? 700 : 400,
+                                    color: i === 0 ? "#2a7f8a" : "#333" }}>
+                                    {i === 0 ? "★ " : ""}{row.diag}
+                                  </td>
+                                  <td style={{ padding: "5px 10px", borderBottom: "1px solid #dee2e6", textAlign: "center" }}>{row.matches.length}</td>
+                                  <td style={{ padding: "5px 10px", borderBottom: "1px solid #dee2e6", textAlign: "center",
+                                    fontWeight: i === 0 ? 700 : 400, color: i === 0 ? "#2a7f8a" : "#333" }}>{row.score}</td>
+                                  <td style={{ padding: "5px 10px", borderBottom: "1px solid #dee2e6",
+                                    fontFamily: "monospace", fontSize: 11, color: "#6c757d" }}>
+                                    {row.matches.slice(0, 6).map(m => `Q[${m.qi}]↔S[${m.si}]`).join("  ")}
+                                    {row.matches.length > 6 && " …"}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div style={{ background: "#fff3cd", borderRadius: 6, padding: "8px 14px", fontSize: 12, color: "#856404" }}>
+                          No k-tuple matches — try reducing ktup.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Step 3: Band alignment ── */}
+                  {fastaStep === 3 && (
+                    <div>
+                      <p style={info}>
+                        FASTA runs a <strong>banded Smith-Waterman</strong> alignment restricted to a narrow region (band) around
+                        the best-scoring diagonal. This is much faster than full Smith-Waterman and captures the local alignment seeded
+                        by the k-tuple hits. A final unrestricted Smith-Waterman is applied to the best candidates to get the optimal score.
+                      </p>
+                      <DotPlot query={query} subject={subject} ktup={ktup}
+                        diagMap={fastaRes.diagMap} bestDiag={bestDiag} showBand={true} />
+                      {bestDiag !== null ? (
+                        <div style={{ marginTop: 12 }}>
+                          <div style={{ background: "#e8f4f6", borderRadius: 8, padding: 12, fontSize: 13, marginBottom: 10 }}>
+                            <strong>Best diagonal:</strong> {bestDiag}
+                            &nbsp;·&nbsp;<strong>init1 score:</strong> {fastaRes.ranked[0]?.score}
+                            &nbsp;·&nbsp;<strong>Band:</strong> diagonal ± 2
+                          </div>
+                          {/* simplified alignment along best diagonal */}
+                          <div style={{ fontFamily: "monospace", fontSize: 13, lineHeight: 2.2,
+                            background: "#f8f9fa", padding: "10px 14px", borderRadius: 6, border: "1px solid #dee2e6" }}>
+                            {(() => {
+                              // build gapless alignment region along best diagonal
+                              const d = bestDiag;
+                              // qi = si + d  →  si = qi - d
+                              const qStart = Math.max(0, d);
+                              const qEnd   = Math.min(query.length - 1, subject.length - 1 + d);
+                              const qRegion = query.slice(qStart, qEnd + 1);
+                              const sRegion = subject.slice(qStart - d, qEnd - d + 1);
+                              const hitSet = new Set(
+                                (fastaRes.diagMap[d]?.matches || []).flatMap(m =>
+                                  Array.from({ length: ktup }, (_, k) => m.qi + k)
+                                )
+                              );
+                              return (
+                                <>
+                                  <div>
+                                    <span style={{ color: "#6c757d" }}>Query [{qStart}–{qEnd}]:&nbsp;</span>
+                                    {qRegion.split("").map((c, k) => {
+                                      const qi = qStart + k;
+                                      const hi = hitSet.has(qi);
+                                      return <span key={k} style={{ color: hi ? "#2a7f8a" : "#333", fontWeight: hi ? 700 : 400 }}>{c}</span>;
+                                    })}
+                                  </div>
+                                  <div style={{ paddingLeft: "10.5em" }}>
+                                    {qRegion.split("").map((c, k) => {
+                                      const qi = qStart + k;
+                                      const si = qi - d;
+                                      const m = c === subject[si];
+                                      return <span key={k} style={{ color: m ? "#059669" : "#dee2e6" }}>{m ? "|" : "·"}</span>;
+                                    })}
+                                  </div>
+                                  <div>
+                                    <span style={{ color: "#6c757d" }}>Subj  [{qStart-d}–{qEnd-d}]:&nbsp;</span>
+                                    {sRegion.split("").map((c, k) => {
+                                      const qi = qStart + k;
+                                      const hi = hitSet.has(qi);
+                                      return <span key={k} style={{ color: hi ? "#2a7f8a" : "#333", fontWeight: hi ? 700 : 400 }}>{c}</span>;
+                                    })}
+                                  </div>
+                                </>
+                              );
+                            })()}
+                          </div>
+                          <div style={{ marginTop: 8, fontSize: 12, color: "#6c757d" }}>
+                            <span style={{ color: "#2a7f8a", fontWeight: 700 }}>Teal</span> = k-tuple match positions on best diagonal
+                            · <span style={{ color: "#059669" }}>|</span> = identical · <span style={{ color: "#dee2e6" }}>·</span> = mismatch
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ marginTop: 10, background: "#fff3cd", borderRadius: 6, padding: "8px 14px", fontSize: 12, color: "#856404" }}>
+                          No k-tuple matches found. Reduce ktup to 1 or try a different example.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* FASTA concept summary */}
+                <div style={{ ...card, background: "#f0fafa", border: "1px solid #b8dce2" }}>
+                  <h3 style={{ fontSize: 13, fontWeight: 700, color: "#2a7f8a", marginTop: 0, marginBottom: 8 }}>
+                    FASTA algorithm summary
+                  </h3>
+                  <ol style={{ fontSize: 12, color: "#495057", lineHeight: 1.9, paddingLeft: 20, margin: 0 }}>
+                    <li><strong>Index query k-tuples</strong> — build a hash table of all k-letter words in the query (O(Q) time).</li>
+                    <li><strong>Scan database</strong> — for each position in each database sequence, look up the k-tuple in the hash table; record diagonal of each hit (O(D) time).</li>
+                    <li><strong>Score diagonals</strong> — sum hits per diagonal; select top-scoring diagonals (<em>init1</em> score).</li>
+                    <li><strong>Banded alignment</strong> — run Smith-Waterman restricted to a band around the best diagonals (<em>initn</em> score).</li>
+                    <li><strong>Full alignment</strong> — apply unrestricted Smith-Waterman to the top candidates to yield the final <em>opt</em> score and z-score significance.</li>
+                  </ol>
+                </div>
+              </div>
+            )}
+
+            {/* ════════════════════ BLAST PANEL ════════════════════ */}
+            {algo === "blast" && (
+              <div>
+                <div style={card}>
+                  {/* word size selector + step nav */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#6c757d" }}>Word size W =</span>
+                      {[2, 3, 4].map(w => (
+                        <button key={w} style={btn(wordSize === w, true)} onClick={() => { setWordSize(w); setBlastStep(1); setSelHsp(0); }}>{w}</button>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#6c757d" }}>
+                      (real BLAST: W=11 DNA · W=3 protein)
+                    </div>
+                  </div>
+
+                  {/* Step tabs */}
+                  <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1px solid #dee2e6", marginBottom: 18 }}>
+                    {[
+                      { n: 1, label: "① Query words" },
+                      { n: 2, label: "② Seed hits" },
+                      { n: 3, label: "③ Extension & HSP" },
+                      { n: 4, label: "④ E-value" },
+                    ].map((s, i, arr) => (
+                      <button key={s.n} onClick={() => setBlastStep(s.n)} style={{
+                        ...tabBtn(blastStep === s.n),
+                        borderRight: i < arr.length - 1 ? "1px solid #dee2e6" : "none",
+                      }}>{s.label}</button>
+                    ))}
+                  </div>
+
+                  {/* ── Step 1: Query words ── */}
+                  {blastStep === 1 && (
+                    <div>
+                      <p style={info}>
+                        BLAST decomposes the query into all overlapping <strong>words of length W = {wordSize}</strong>.
+                        These words are used as seeds to search the database. In protein BLAST, <em>neighbourhood words</em>
+                        (substitution variants above a score threshold T) are also included to increase sensitivity.
+                      </p>
+                      {blastRes.words.length > 0 ? (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {blastRes.words.map((w, i) => (
+                            <div key={i} style={{
+                              background: "#e8f4f6", border: "1px solid #b8dce2",
+                              borderRadius: 6, padding: "4px 10px",
+                              fontFamily: "monospace", fontSize: 13, fontWeight: 700,
+                              display: "inline-flex", gap: 6, alignItems: "center",
+                            }}>
+                              <span style={{ fontSize: 10, color: "#6c757d" }}>Q[{w.qpos}]</span>
+                              <span style={{ color: "#2a7f8a" }}>{w.word}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div style={{ color: "#856404", background: "#fff3cd", borderRadius: 6, padding: "8px 14px", fontSize: 12 }}>
+                          Query too short for W={wordSize}. Reduce word size or lengthen the query.
+                        </div>
+                      )}
+                      <div style={{ marginTop: 10, background: "#f8f9fa", borderRadius: 6, padding: "8px 14px", fontSize: 12, color: "#495057", border: "1px solid #dee2e6" }}>
+                        <strong>{blastRes.words.length}</strong> words from a query of length {query.length} with W={wordSize}.
+                        Each word is looked up in a pre-built database index in <strong>O(1)</strong> time — this is what makes BLAST fast.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Step 2: Seed hits ── */}
+                  {blastStep === 2 && (
+                    <div>
+                      <p style={info}>
+                        BLAST scans the database for <strong>exact matches</strong> of each query word.
+                        Each match is called a <em>seed</em>. Only sequences containing a seed are considered for extension —
+                        sequences with no matching word are skipped entirely, saving enormous computation time.
+                      </p>
+                      {/* sequence display with seeds highlighted */}
+                      <div style={{ fontFamily: "monospace", fontSize: 14, lineHeight: 2.6, marginBottom: 12 }}>
+                        {[["Query  ", query, blastRes.seeds, "qpos"], ["Subject", subject, blastRes.seeds, "spos"]].map(([label, seq, seeds, posKey]) => (
+                          <div key={label}>
+                            <span style={{ color: "#6c757d", fontSize: 12 }}>{label}: </span>
+                            {seq.split("").map((c, i) => {
+                              const inSeed = seeds.some(s => i >= s[posKey] && i < s[posKey] + wordSize);
+                              return (
+                                <span key={i} style={{
+                                  color: inSeed ? "#2a7f8a" : "#333",
+                                  fontWeight: inSeed ? 700 : 400,
+                                  background: inSeed ? "#e8f4f6" : "transparent",
+                                  borderRadius: 2, padding: "1px 0",
+                                }}>{c}</span>
+                              );
+                            })}
+                          </div>
+                        ))}
+                      </div>
+                      {blastRes.seeds.length > 0 ? (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {blastRes.seeds.map((s, i) => (
+                            <div key={i} style={{ background: "#e8f4f6", border: "1px solid #b8dce2", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
+                              <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#2a7f8a" }}>{s.word}</span>
+                              <span style={{ color: "#6c757d" }}> Q[{s.qpos}] ↔ S[{s.spos}]</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div style={{ background: "#fff3cd", borderRadius: 6, padding: "8px 14px", fontSize: 12, color: "#856404" }}>
+                          No exact {wordSize}-mer seeds found. Try W=2 or select a different example.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Step 3: Extension & HSP ── */}
+                  {blastStep === 3 && (
+                    <div>
+                      <p style={info}>
+                        Each seed is <strong>extended</strong> left and right as long as the cumulative score stays positive
+                        (ungapped extension). The resulting aligned segment is a <strong>High Scoring Segment Pair (HSP)</strong>.
+                        Mismatches cost −1 point; matches add +1 point. Extension stops when the score would drop below zero.
+                      </p>
+                      {blastRes.hsps.length > 0 ? (
+                        <div>
+                          {/* HSP selector */}
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+                            {blastRes.hsps.map((h, i) => (
+                              <button key={i} style={btn(selHsp === i, true)}
+                                onClick={() => setSelHsp(i)}>
+                                HSP {i + 1} — score {h.score}
+                              </button>
+                            ))}
+                          </div>
+                          {(() => {
+                            const h = blastRes.hsps[selHsp] || blastRes.hsps[0];
+                            if (!h) return null;
+                            const len = h.qend - h.qstart + 1;
+                            const idents = Array.from({ length: len }, (_, k) =>
+                              query[h.qstart + k] === subject[h.sstart + k]).filter(Boolean).length;
+                            return (
+                              <div>
+                                {/* Alignment */}
+                                <div style={{ fontFamily: "monospace", fontSize: 13, lineHeight: 2.2,
+                                  background: "#f8f9fa", padding: "10px 14px", borderRadius: 6, border: "1px solid #dee2e6", marginBottom: 12 }}>
+                                  <div>
+                                    <span style={{ color: "#6c757d" }}>Query  {String(h.qstart).padStart(3)}: </span>
+                                    {Array.from({ length: len }, (_, k) => {
+                                      const c = query[h.qstart + k];
+                                      const isSeed = h.qstart + k >= h.seed.qpos && h.qstart + k < h.seed.qpos + wordSize;
+                                      const isMatch = c === subject[h.sstart + k];
+                                      return <span key={k} style={{
+                                        color: isMatch ? "#059669" : "#dc2626",
+                                        fontWeight: isSeed ? 700 : 400,
+                                        background: isSeed ? "#e8f4f6" : "transparent",
+                                        borderRadius: 2,
+                                      }}>{c}</span>;
+                                    })}
+                                    <span style={{ color: "#6c757d" }}> :{h.qend}</span>
+                                  </div>
+                                  <div style={{ paddingLeft: "8.5em" }}>
+                                    {Array.from({ length: len }, (_, k) =>
+                                      query[h.qstart + k] === subject[h.sstart + k] ? "|" : " "
+                                    ).map((c, k) => <span key={k} style={{ color: "#6c757d" }}>{c}</span>)}
+                                  </div>
+                                  <div>
+                                    <span style={{ color: "#6c757d" }}>Sbjct  {String(h.sstart).padStart(3)}: </span>
+                                    {Array.from({ length: len }, (_, k) => {
+                                      const c = subject[h.sstart + k];
+                                      const isMatch = c === query[h.qstart + k];
+                                      return <span key={k} style={{ color: isMatch ? "#059669" : "#dc2626" }}>{c}</span>;
+                                    })}
+                                    <span style={{ color: "#6c757d" }}> :{h.send}</span>
+                                  </div>
+                                </div>
+                                {/* Stats */}
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                                  {[
+                                    ["Score", h.score],
+                                    ["HSP length", len],
+                                    ["Identities", `${idents}/${len} (${Math.round(100*idents/len)}%)`],
+                                    ["Seed word", h.seed.word],
+                                  ].map(([k, v]) => (
+                                    <div key={k} style={chip()}>
+                                      <span style={{ color: "#6c757d" }}>{k}: </span>
+                                      <strong style={{ color: "#2a7f8a" }}>{v}</strong>
+                                    </div>
+                                  ))}
+                                </div>
+                                <div style={{ marginTop: 10, fontSize: 12, color: "#6c757d" }}>
+                                  <span style={{ background: "#e8f4f6", borderRadius: 3, padding: "1px 4px", fontWeight: 700, color: "#2a7f8a" }}>Highlighted</span>
+                                  {" = seed word · "}
+                                  <span style={{ color: "#059669", fontWeight: 700 }}>green</span> = match ·{" "}
+                                  <span style={{ color: "#dc2626", fontWeight: 700 }}>red</span> = mismatch
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      ) : (
+                        <div style={{ background: "#fff3cd", borderRadius: 6, padding: "8px 14px", fontSize: 12, color: "#856404" }}>
+                          No HSPs found. Try W=2 or a more similar sequence pair.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Step 4: E-value ── */}
+                  {blastStep === 4 && (
+                    <div>
+                      <p style={info}>
+                        The <strong>E-value</strong> (expect value) is the number of HSPs with this score or better you would
+                        expect to find by <em>chance</em> when searching a database of the given size.
+                        It follows the <strong>Karlin-Altschul</strong> extreme value distribution:
+                        <span style={{ fontFamily: "monospace", display: "block", margin: "6px 0", background: "#f8f9fa", padding: "6px 12px", borderRadius: 4, border: "1px solid #dee2e6" }}>
+                          E = K · m · n · e<sup>−λS</sup>
+                        </span>
+                        where <em>m</em> = query length, <em>n</em> = database size, <em>S</em> = raw alignment score,
+                        and K, λ are statistical constants that depend on the scoring matrix.
+                      </p>
+                      {blastRes.hsps.length > 0 ? (
+                        <div>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                            <thead>
+                              <tr style={{ background: "#f8f9fa" }}>
+                                {["HSP", "Score (S)", "E-value", "Significant?"].map(h => (
+                                  <th key={h} style={{ padding: "6px 10px", borderBottom: "2px solid #dee2e6", textAlign: "left", fontWeight: 700 }}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {blastRes.hsps.map((h, i) => {
+                                const e = evalue(h.score, query.length, subject.length);
+                                const sig = e < 0.05;
+                                return (
+                                  <tr key={i}>
+                                    <td style={{ padding: "6px 10px", borderBottom: "1px solid #dee2e6", fontFamily: "monospace" }}>
+                                      {i + 1}: {h.seed.word}
+                                    </td>
+                                    <td style={{ padding: "6px 10px", borderBottom: "1px solid #dee2e6", textAlign: "center", fontWeight: 700 }}>
+                                      {h.score}
+                                    </td>
+                                    <td style={{ padding: "6px 10px", borderBottom: "1px solid #dee2e6", fontFamily: "monospace",
+                                      color: sig ? "#059669" : e < 1 ? "#c2410c" : "#dc2626", fontWeight: 700 }}>
+                                      {e < 0.001 ? e.toExponential(2) : e < 10 ? e.toFixed(3) : e.toFixed(1)}
+                                    </td>
+                                    <td style={{ padding: "6px 10px", borderBottom: "1px solid #dee2e6" }}>
+                                      <span style={{
+                                        background: sig ? "#d1fae5" : e < 1 ? "#fff3cd" : "#fee2e2",
+                                        color: sig ? "#065f46" : e < 1 ? "#92400e" : "#991b1b",
+                                        borderRadius: 4, padding: "2px 8px", fontWeight: 700, fontSize: 11,
+                                      }}>
+                                        {sig ? "✓ Yes (< 0.05)" : e < 1 ? "Marginal" : "✗ No"}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                          <div style={{ marginTop: 12, background: "#f8f9fa", borderRadius: 6, padding: "10px 14px", fontSize: 12, color: "#495057", border: "1px solid #dee2e6" }}>
+                            <strong>Note:</strong> These E-values use the subject sequence as a proxy for database size (m={query.length}, n={subject.length}).
+                            Real BLAST searches use the full database size (e.g., n ≈ 10<sup>10</sup> for nr), which raises E-values substantially —
+                            a score that looks marginal here may be highly significant in a real search.
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ background: "#fff3cd", borderRadius: 6, padding: "8px 14px", fontSize: 12, color: "#856404" }}>
+                          No HSPs to evaluate. Try W=2 or a different sequence pair.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* BLAST concept summary */}
+                <div style={{ ...card, background: "#f0fafa", border: "1px solid #b8dce2" }}>
+                  <h3 style={{ fontSize: 13, fontWeight: 700, color: "#2a7f8a", marginTop: 0, marginBottom: 8 }}>
+                    BLAST algorithm summary
+                  </h3>
+                  <ol style={{ fontSize: 12, color: "#495057", lineHeight: 1.9, paddingLeft: 20, margin: 0 }}>
+                    <li><strong>Word generation</strong> — extract all W-mers from the query; for protein, add neighbourhood words above score threshold T.</li>
+                    <li><strong>Database index lookup</strong> — use a pre-built hash table to find all exact seed matches in O(1) per word; skip sequences with no seeds.</li>
+                    <li><strong>Ungapped extension</strong> — extend each seed left and right; stop when cumulative score drops by X (drop-off parameter).</li>
+                    <li><strong>Gapped extension</strong> — apply Smith-Waterman with affine gap penalties to the best ungapped HSPs above threshold S<sub>2</sub>.</li>
+                    <li><strong>E-value &amp; reporting</strong> — rank HSPs by E-value (Karlin-Altschul statistics); report hits below the significance threshold (default E &lt; 10).</li>
+                  </ol>
+                  <div style={{ marginTop: 10, padding: "8px 12px", background: "white", borderRadius: 6, border: "1px solid #b8dce2", fontSize: 11, color: "#495057" }}>
+                    <strong>FASTA vs BLAST:</strong> FASTA uses diagonal k-tuple scoring + banded alignment; BLAST uses word hashing + direct extension.
+                    BLAST is generally faster. FASTA is slightly more sensitive for distant homologs at protein level because it considers all k-tuple diagonals before extending.
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div style={{ textAlign: "center", fontSize: 11, color: "#6c757d", padding: "10px 0 20px" }}>
+              BSB511 / BENG451 — Bioinformatics Fundamentals — FASTA &amp; BLAST Simulator
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
