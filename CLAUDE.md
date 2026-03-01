@@ -54,6 +54,7 @@ All widgets in `docs/` share the same pattern:
 | `motif-finder.html` | PROSITE pattern scanning on protein & DNA sequences |
 | `phylo-interpreter.html` | UPGMA & Neighbor-Joining step-by-step tree building, Newick export |
 | `big-o-complexity.html` | Big-O growth curves, bioinformatics algorithm browser by complexity class, 8-question quiz |
+| `hmm-hmmer.html` | Profile HMM architecture (match/insert/delete states), MSA→profile builder, Viterbi log-odds scoring, 8-question quiz |
 
 ## Exercises (`exercises/`)
 

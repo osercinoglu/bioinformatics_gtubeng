@@ -1,0 +1,1118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hidden Markov Models &amp; HMMER — BSB511 / BENG451</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Nunito+Sans:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; font-family: 'Nunito Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    h1, h2, h3, h4, h5, h6 { font-family: 'Nunito', system-ui, sans-serif; }
+    .back-link {
+      position: fixed; top: 12px; left: 12px; z-index: 1000;
+      padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 700;
+      background: white; color: #2a7f8a; text-decoration: none;
+      border: 1px solid #b8dce2; font-family: 'Nunito Sans', sans-serif; transition: all 0.2s ease-in-out;
+    }
+    .back-link:hover { background: #e8f4f6; color: #1e5f6a; border-color: #2a7f8a; }
+  </style>
+</head>
+<body>
+  <a href="index.html" class="back-link">← All Widgets</a>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useMemo, useCallback } = React;
+
+    /* ── MSA example: a zinc-finger-like motif ──────────────────────────────── */
+    // 5 sequences × 6 alignment columns; column 4 is an insert column (80 % gaps)
+    const MSA_SEQS = [
+      { name: 'Seq1', res: ['L','K','H','-','C','P'] },
+      { name: 'Seq2', res: ['L','R','H','-','C','P'] },
+      { name: 'Seq3', res: ['M','K','H','-','C','A'] },
+      { name: 'Seq4', res: ['L','K','Y','-','C','P'] },
+      { name: 'Seq5', res: ['L','K','H','S','C','P'] },
+    ];
+    // Column roles: M = match column, I = insert column
+    const COL_ROLES   = ['M','M','M','I','M','M'];
+    const COL_LABELS  = ['M1','M2','M3','—','M4','M5'];
+
+    /* ── Amino-acid colour scheme (biochemical property groups) ─────────────── */
+    const AA_BG = {
+      A:'#FDE8C8',V:'#FDE8C8',L:'#FDE8C8',I:'#FDE8C8',
+      M:'#FDE8C8',F:'#FDE8C8',W:'#FDE8C8',P:'#E9D5FF',
+      K:'#BFDBFE',R:'#BFDBFE',H:'#DBEAFE',
+      D:'#FECACA',E:'#FECACA',
+      S:'#BBF7D0',T:'#BBF7D0',N:'#BBF7D0',Q:'#BBF7D0',G:'#E2E8F0',Y:'#FEF08A',
+      C:'#FEF08A','-':'#F1F5F9',
+    };
+    const AA_FG = {
+      A:'#92400E',V:'#92400E',L:'#92400E',I:'#92400E',
+      M:'#92400E',F:'#92400E',W:'#92400E',P:'#6B21A8',
+      K:'#1D4ED8',R:'#1D4ED8',H:'#1E40AF',
+      D:'#991B1B',E:'#991B1B',
+      S:'#166534',T:'#166534',N:'#166534',Q:'#166534',G:'#475569',Y:'#854D0E',
+      C:'#854D0E','-':'#94A3B8',
+    };
+
+    /* ── Background amino-acid frequencies (UniProtKB-derived) ─────────────── */
+    const BG = {
+      A:0.083,C:0.014,D:0.055,E:0.062,F:0.039,G:0.071,H:0.023,I:0.060,
+      K:0.058,L:0.097,M:0.024,N:0.041,P:0.047,Q:0.039,R:0.055,S:0.066,
+      T:0.053,V:0.069,W:0.011,Y:0.029,
+    };
+
+    /* ── Precomputed log₂ log-odds scores: LOG_ODDS[state][aa]
+         state 0 = M1, 1 = M2, 2 = M3, 3 = M4, 4 = M5
+         Positive = enriched at this position, negative = depleted.
+         Computed as log2(p(aa|Mk) / p(aa|background)) with Dirichlet pseudocounts. ── */
+    const LOG_ODDS = [
+      // M1: L×4 M×1 — favours hydrophobics
+      { A:-0.9,C:-3.0,D:-4.0,E:-3.8,F:-2.3,G:-3.2,H:-2.9,I:-0.9,
+        K:-3.1,L: 2.8,M: 2.8,N:-3.4,P:-2.7,Q:-3.5,R:-3.1,
+        S:-3.1,T:-2.9,V:-1.0,W:-2.6,Y:-2.4 },
+      // M2: K×4 R×1 — favours positive charge
+      { A:-1.0,C:-2.9,D:-3.3,E:-2.7,F:-3.1,G:-3.1,H:-2.3,I:-1.1,
+        K: 3.0,L:-1.3,M:-1.1,N:-2.2,P:-2.3,Q:-1.8,R: 2.5,
+        S:-1.7,T:-1.5,V:-1.3,W:-3.3,Y:-2.7 },
+      // M3: H×4 Y×1 — strongly conserved H (e.g. Zn-coordinating His)
+      { A:-1.2,C:-2.5,D:-3.1,E:-2.8,F:-2.3,G:-3.3,H: 4.9,I:-1.7,
+        K:-1.6,L:-1.7,M:-1.6,N:-2.8,P:-2.7,Q:-2.2,R:-1.8,
+        S:-2.4,T:-2.2,V:-1.8,W:-2.2,Y: 2.4 },
+      // M4: C×5 — perfectly conserved Cys (Zn-coordinating)
+      { A:-2.1,C: 5.9,D:-4.4,E:-4.2,F:-2.8,G:-3.7,H:-3.8,I:-2.2,
+        K:-3.5,L:-2.2,M:-2.2,N:-3.8,P:-3.3,Q:-3.9,R:-3.5,
+        S:-2.8,T:-2.6,V:-2.1,W:-3.6,Y:-3.1 },
+      // M5: P×4 A×1 — favours Pro / Ala
+      { A: 2.0,C:-3.2,D:-3.7,E:-3.5,F:-2.9,G:-2.7,H:-2.7,I:-2.2,
+        K:-2.3,L:-2.2,M:-2.1,N:-3.2,P: 2.7,Q:-3.3,R:-2.6,
+        S:-2.2,T:-2.0,V:-1.9,W:-3.5,Y:-3.0 },
+    ];
+
+    // Transition probabilities (M→M, M→I, M→D) for each match state
+    const TRANS_MM = [0.95, 0.95, 0.78, 0.95, 1.00];
+    const TRANS_MI = [0.02, 0.02, 0.20, 0.02, 0.00];
+    const TRANS_MD = [0.03, 0.03, 0.02, 0.03, 0.00];
+
+    /* ── Query presets (length 5, one residue per match state) ─────────────── */
+    const QUERIES = [
+      { label: 'LKHCP — strong match',   seq: 'LKHCP' },
+      { label: 'MRHCA — moderate match', seq: 'MRHCA' },
+      { label: 'LRYHP — partial match',  seq: 'LRYHP' },
+      { label: 'VKFNW — poor match',     seq: 'VKFNW' },
+    ];
+
+    /* ── Quiz ───────────────────────────────────────────────────────────────── */
+    const QUIZ = [
+      {
+        q: 'In a profile HMM, a match state (M) represents:',
+        choices: ['A conserved column in the training alignment',
+                  'A position where insertions are common',
+                  'A silent state that models gaps',
+                  'The background null model'],
+        answer: 0,
+        explanation: 'Each match state corresponds to one column in the multiple sequence alignment that is predominantly occupied (few gaps). It emits amino acids with position-specific probabilities reflecting the observed conservation.',
+      },
+      {
+        q: 'Delete states (D) in a profile HMM are called "silent" because:',
+        choices: ['They are never visited during alignment',
+                  'They emit no amino acid — they model a gap in the query sequence',
+                  'They have zero transition probability',
+                  'They are removed before searching a database'],
+        answer: 1,
+        explanation: 'A delete state is traversed when the query sequence has a gap (deletion) at a position that is present in the profile. Because no residue is consumed from the query, the state emits nothing — hence "silent".',
+      },
+      {
+        q: 'How does a HMMER profile HMM improve on a position-specific scoring matrix (PSSM)?',
+        choices: ['It uses BLOSUM62 substitution scores',
+                  'It explicitly models insertions and deletions via dedicated I and D states',
+                  'It searches the database faster than BLAST',
+                  'It requires no training alignment'],
+        answer: 1,
+        explanation: 'A PSSM assigns a score per (position, amino acid) pair but has no principled way to handle gaps. A profile HMM adds insert states (emit extra residues) and delete states (skip positions), each with learned transition probabilities.',
+      },
+      {
+        q: 'The Viterbi algorithm, as used by HMMER, finds:',
+        choices: ['The total probability summed over all possible paths',
+                  'The most probable single path through the HMM for a given sequence',
+                  'The average score of all database sequences',
+                  'The E-value of the best-scoring segment'],
+        answer: 1,
+        explanation: 'Viterbi is a dynamic-programming algorithm that tracks the single highest-probability path through the HMM state sequence, analogous to Needleman-Wunsch but on an HMM rather than a pairwise DP matrix. HMMER also uses the Forward algorithm (sum over all paths) for E-value calculation.',
+      },
+      {
+        q: 'A HMMER bit score is defined as:',
+        choices: ['The number of matching residues divided by alignment length',
+                  'log₂(P(sequence | profile model) / P(sequence | null model))',
+                  'The percentage identity to the top hit in the alignment',
+                  'The Viterbi score normalised by query length'],
+        answer: 1,
+        explanation: 'The bit score is a log-odds ratio comparing the probability that the sequence was generated by the profile (homolog model) versus a random model where residues appear at background frequencies. Higher bit scores = stronger evidence of homology.',
+      },
+      {
+        q: 'In HMMER, the column assignment rule for building a profile from an MSA is:',
+        choices: ['All alignment columns become match states',
+                  'Columns with ≥ 50 % gaps become insert columns; others become match states',
+                  'Only perfectly conserved columns become match states',
+                  'Insert columns are determined by the Viterbi traceback'],
+        answer: 1,
+        explanation: "HMMER's default heuristic: if ≥ 50 % of sequences have a residue (i.e., < 50 % gaps) in a column, it becomes a match state. Columns that are mostly gaps become insert columns, contributing to insert-state emission frequencies.",
+      },
+      {
+        q: 'An hmmsearch E-value of 1×10⁻³⁰ compared to a threshold of 0.001 indicates:',
+        choices: ['The sequence is likely a false positive',
+                  'The sequence is almost certainly a true homolog',
+                  'The search was too sensitive and should be re-run',
+                  'The bit score is below the noise floor'],
+        answer: 1,
+        explanation: 'An E-value of 1×10⁻³⁰ means we expect fewer than 10⁻³⁰ false positives with this score in the entire database — an astronomically strong signal. An E-value well below 0.001 is overwhelming evidence for true homology.',
+      },
+      {
+        q: 'Which of the following correctly describes the role of the insert state (I) in a profile HMM?',
+        choices: ['It models a conserved indel that is present in all training sequences',
+                  'It models extra residues in the query that have no counterpart in the profile',
+                  'It represents a gap in the profile alignment that is skipped',
+                  'It stores the null model background frequency'],
+        answer: 1,
+        explanation: 'An insert state emits one or more residues from the query that do not correspond to any match column in the profile. It has a self-transition (I→I) allowing multiple inserted residues, and transitions back to the next match state when the insertion ends.',
+      },
+    ];
+
+    /* ── Helpers ────────────────────────────────────────────────────────────── */
+    function scoreColor(s) {
+      if (s === null || s === undefined) return '#F8FAFC';
+      if (s >=  4) return '#16A34A';
+      if (s >=  2) return '#4ADE80';
+      if (s >=  0) return '#BBF7D0';
+      if (s >= -2) return '#FECACA';
+      return '#F87171';
+    }
+    function scoreFg(s) {
+      if (s === null || s === undefined) return '#94A3B8';
+      if (s >= 2) return '#fff';
+      if (s >= 0) return '#166534';
+      return '#7F1D1D';
+    }
+    function fmt(s) {
+      if (s === null || s === undefined) return '—';
+      return (s >= 0 ? '+' : '') + s.toFixed(1);
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════════
+       TAB 1 — HMM Architecture diagram
+    ══════════════════════════════════════════════════════════════════════════ */
+    const STATE_TYPES = [
+      {
+        id: 'match',
+        label: 'Match States (M)',
+        color: '#2a7f8a',
+        fill: '#e8f4f6',
+        short: 'Emit amino acids with position-specific probabilities',
+        detail: 'Each match state Mₖ corresponds to one conserved column in the training alignment. It emits amino acids with probabilities derived from the observed amino acid frequencies at that column (plus pseudocounts). Well-conserved positions have peaked emission distributions; variable positions have flatter distributions.',
+      },
+      {
+        id: 'insert',
+        label: 'Insert States (I)',
+        color: '#3B82F6',
+        fill: '#DBEAFE',
+        short: 'Emit extra residues not present in the profile',
+        detail: 'An insert state Iₖ handles residues in the query that have no counterpart in the profile. It emits amino acids at roughly background frequency and has a self-transition (I→I), allowing multiple inserted residues. It is entered from Mₖ and exits to Mₖ₊₁. Insert states make the model more flexible than a PSSM.',
+      },
+      {
+        id: 'delete',
+        label: 'Delete States (D)',
+        color: '#F97316',
+        fill: '#FFF7ED',
+        short: 'Silent states modelling a gap in the query',
+        detail: "A delete state Dₖ is a silent state — it emits no amino acid. It is traversed when the query sequence has a gap at a position that is present in the profile. Delete states allow the model to handle sequences that are shorter than the profile, or that have insertions in the database entry relative to the query. They are the HMM equivalent of a gap penalty in pairwise alignment.",
+      },
+    ];
+
+    function HMMDiagram({ activeType, setActiveType }) {
+      // 3-state profile HMM; viewBox 0 0 640 280
+      const MC = '#2a7f8a', IC = '#3B82F6', DC = '#F97316', NC = '#94A3B8';
+      const dimmed = (type) => activeType && activeType !== type ? 0.15 : 1;
+      const mDim = dimmed('match'), iDim = dimmed('insert'), dDim = dimmed('delete');
+
+      // State centres
+      const B  = [45,  135];
+      const M  = [[160,135],[300,135],[440,135]];
+      const I  = [[160, 65],[300, 65],[440, 65]];
+      const D  = [[160,210],[300,210],[440,210]];
+      const E  = [540, 135];
+
+      const arrowId = (c) => `arr-${c.replace('#','')}`;
+
+      // Clamp to circle edge
+      function edgePt([cx,cy], [tx,ty], r) {
+        const dx = tx-cx, dy = ty-cy, d = Math.hypot(dx,dy);
+        return [cx + dx/d*r, cy + dy/d*r];
+      }
+      function lineArrow(from, to, color, opacity=1) {
+        const [x1,y1] = from, [x2,y2] = to;
+        return <line x1={x1} y1={y1} x2={x2} y2={y2}
+          stroke={color} strokeWidth={1.8} opacity={opacity}
+          markerEnd={`url(#${arrowId(color)})`} />;
+      }
+      function curveArrow(x1,y1, cx,cy, x2,y2, color, opacity=1) {
+        return <path d={`M${x1},${y1} Q${cx},${cy} ${x2},${y2}`}
+          fill="none" stroke={color} strokeWidth={1.8} opacity={opacity}
+          markerEnd={`url(#${arrowId(color)})`} />;
+      }
+
+      const mR = 28, iR = 20, dH = 15; // radii / half-size
+
+      return (
+        <svg viewBox="0 0 600 270" width="100%" style={{ display:'block', overflow:'visible' }}>
+          <defs>
+            {[MC, IC, DC, NC].map(c => (
+              <marker key={c} id={arrowId(c)} markerWidth="8" markerHeight="8"
+                refX="6" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L8,3 z" fill={c} />
+              </marker>
+            ))}
+          </defs>
+
+          {/* ── Delete-state transitions (bottom lane) ── */}
+          {/* B → D1 */}
+          {curveArrow(B[0]+14,B[1]+14, 100,230, D[0][0]-dH,D[0][1], DC, dDim)}
+          {/* D1 → D2 */}
+          {lineArrow([D[0][0]+dH,D[0][1]], [D[1][0]-dH,D[1][1]], DC, dDim)}
+          {/* D2 → D3 */}
+          {lineArrow([D[1][0]+dH,D[1][1]], [D[2][0]-dH,D[2][1]], DC, dDim)}
+          {/* D1 → M2 */}
+          {curveArrow(D[0][0]+dH,D[0][1]-4, 230,175, ...edgePt(M[1],[D[0][0],D[0][1]],mR), DC, dDim)}
+          {/* D2 → M3 */}
+          {curveArrow(D[1][0]+dH,D[1][1]-4, 370,175, ...edgePt(M[2],[D[1][0],D[1][1]],mR), DC, dDim)}
+          {/* D3 → E */}
+          {curveArrow(D[2][0]+dH,D[2][1]-4, 500,175, E[0],E[1]+14, DC, dDim)}
+          {/* M1 → D2 */}
+          {curveArrow(...edgePt(M[0],[D[1][0],D[1][1]],mR), 230,200, D[1][0]-dH,D[1][1], DC, dDim)}
+          {/* M2 → D3 */}
+          {curveArrow(...edgePt(M[1],[D[2][0],D[2][1]],mR), 370,200, D[2][0]-dH,D[2][1], DC, dDim)}
+
+          {/* ── Insert-state transitions (top lane) ── */}
+          {/* M→I upward arrows */}
+          {M.map(([mx,my],k) =>
+            lineArrow([mx,my-mR], [I[k][0],I[k][1]+iR], IC, iDim)
+          )}
+          {/* I self-loops */}
+          {I.map(([ix,iy],k) =>
+            <path key={k} d={`M${ix-14},${iy-iR} C${ix-28},${iy-48} ${ix+28},${iy-48} ${ix+14},${iy-iR}`}
+              fill="none" stroke={IC} strokeWidth={1.8} opacity={iDim}
+              markerEnd={`url(#${arrowId(IC)})`} />
+          )}
+          {/* I→M(next) diagonal arrows */}
+          {curveArrow(I[0][0]+iR,I[0][1]+8, 225,100, ...edgePt(M[1],[I[0][0],I[0][1]],mR), IC, iDim)}
+          {curveArrow(I[1][0]+iR,I[1][1]+8, 365,100, ...edgePt(M[2],[I[1][0],I[1][1]],mR), IC, iDim)}
+          {/* I3 → E */}
+          {curveArrow(I[2][0]+iR,I[2][1]+8, 500,100, E[0],E[1]-14, IC, iDim)}
+
+          {/* ── Match-state main chain ── */}
+          {/* B → M1 */}
+          {lineArrow([B[0]+22,B[1]], [M[0][0]-mR,M[0][1]], MC, mDim)}
+          {/* M1 → M2 */}
+          {lineArrow([M[0][0]+mR,M[0][1]], [M[1][0]-mR,M[1][1]], MC, mDim)}
+          {/* M2 → M3 */}
+          {lineArrow([M[1][0]+mR,M[1][1]], [M[2][0]-mR,M[2][1]], MC, mDim)}
+          {/* M3 → E */}
+          {lineArrow([M[2][0]+mR,M[2][1]], [E[0]-22,E[1]], MC, mDim)}
+
+          {/* ── Delete-state diamonds ── */}
+          {D.map(([dx,dy],k) => {
+            const pts = `${dx},${dy-dH} ${dx+dH},${dy} ${dx},${dy+dH} ${dx-dH},${dy}`;
+            return (
+              <g key={k} opacity={dDim}>
+                <polygon points={pts} fill={STATE_TYPES[2].fill} stroke={DC} strokeWidth={2} />
+                <text x={dx} y={dy+4} textAnchor="middle" fontSize={9} fontWeight={700} fill={DC}>D{k+1}</text>
+              </g>
+            );
+          })}
+
+          {/* ── Insert-state circles ── */}
+          {I.map(([ix,iy],k) => (
+            <g key={k} opacity={iDim}>
+              <circle cx={ix} cy={iy} r={iR} fill={STATE_TYPES[1].fill} stroke={IC} strokeWidth={2} />
+              <text x={ix} y={iy+4} textAnchor="middle" fontSize={10} fontWeight={700} fill={IC}>I{k+1}</text>
+            </g>
+          ))}
+
+          {/* ── Match-state circles ── */}
+          {M.map(([mx,my],k) => (
+            <g key={k} opacity={mDim}>
+              <circle cx={mx} cy={my} r={mR} fill={STATE_TYPES[0].fill} stroke={MC} strokeWidth={2.5} />
+              <text x={mx} y={my+5} textAnchor="middle" fontSize={13} fontWeight={800} fill={MC}>M{k+1}</text>
+            </g>
+          ))}
+
+          {/* ── Begin / End nodes ── */}
+          <circle cx={B[0]} cy={B[1]} r={18} fill="#F1F5F9" stroke="#94A3B8" strokeWidth={2} />
+          <text x={B[0]} y={B[1]+4} textAnchor="middle" fontSize={11} fontWeight={700} fill="#475569">B</text>
+          <circle cx={E[0]} cy={E[1]} r={18} fill="#F1F5F9" stroke="#94A3B8" strokeWidth={2} />
+          <text x={E[0]} y={E[1]+4} textAnchor="middle" fontSize={11} fontWeight={700} fill="#475569">E</text>
+
+          {/* ── Ellipsis for "more states" ── */}
+          <text x={570} y={E[1]+4} fontSize={18} fill="#94A3B8" fontWeight={700}>…</text>
+        </svg>
+      );
+    }
+
+    function ArchitecturePanel() {
+      const [activeType, setActiveType] = useState(null);
+      const active = STATE_TYPES.find(s => s.id === activeType);
+      return (
+        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+
+          {/* Concept intro */}
+          <div style={{ background:'white', borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+            <h3 style={{ fontSize:15, fontWeight:700, color:'#1E293B', margin:'0 0 8px' }}>
+              What is a Profile HMM?
+            </h3>
+            <p style={{ fontSize:13, color:'#475569', lineHeight:1.7, margin:0 }}>
+              A <strong>profile hidden Markov model</strong> (profile HMM) encodes the conservation
+              patterns of a protein family as a probabilistic model. Unlike a PSSM (position-specific
+              scoring matrix), a profile HMM explicitly models <em>insertions</em> and <em>deletions
+              </em> via dedicated states — making it better suited for detecting distant homologs with
+              structural gaps. HMMER uses profile HMMs to search sequence databases at BLAST-like
+              speed with greater sensitivity.
+            </p>
+          </div>
+
+          {/* State-type buttons */}
+          <div style={{ background:'white', borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+            <p style={{ fontSize:11, fontWeight:700, color:'#64748B', margin:'0 0 10px' }}>
+              CLICK A STATE TYPE TO HIGHLIGHT IT IN THE DIAGRAM
+            </p>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:16 }}>
+              {STATE_TYPES.map(st => (
+                <button key={st.id} onClick={() => setActiveType(activeType === st.id ? null : st.id)}
+                  style={{
+                    padding:'8px 14px', fontSize:12, fontWeight:700, borderRadius:8, cursor:'pointer',
+                    border:`2px solid ${activeType === st.id ? st.color : '#E2E8F0'}`,
+                    background: activeType === st.id ? st.fill : 'white',
+                    color: activeType === st.id ? st.color : '#64748B',
+                  }}>
+                  {st.label}
+                </button>
+              ))}
+            </div>
+
+            <HMMDiagram activeType={activeType} setActiveType={setActiveType} />
+
+            {active && (
+              <div style={{
+                marginTop:14, background: active.fill,
+                border:`1px solid ${active.color}40`, borderRadius:10, padding:'12px 16px',
+              }}>
+                <p style={{ fontSize:13, fontWeight:700, color: active.color, margin:'0 0 4px' }}>
+                  {active.label}
+                </p>
+                <p style={{ fontSize:13, color:'#475569', lineHeight:1.7, margin:0 }}>
+                  {active.detail}
+                </p>
+              </div>
+            )}
+            {!active && (
+              <p style={{ fontSize:12, color:'#94A3B8', textAlign:'center', marginTop:10 }}>
+                The diagram shows a 3-state profile (the pattern repeats for all K match positions).
+                Arrows encode allowed transitions — their probabilities are learned from the training MSA.
+              </p>
+            )}
+          </div>
+
+          {/* Transition legend */}
+          <div style={{ background:'white', borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+            <p style={{ fontSize:11, fontWeight:700, color:'#64748B', margin:'0 0 12px' }}>
+              KEY TRANSITIONS
+            </p>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))', gap:8 }}>
+              {[
+                { path:'Mₖ → Mₖ₊₁', color:'#2a7f8a', desc:'Continue aligning — consume one query residue, advance one profile position' },
+                { path:'Mₖ → Iₖ → Mₖ₊₁', color:'#3B82F6', desc:'Insertion in the query — consume extra residues at background frequency' },
+                { path:'Mₖ → Dₖ₊₁ → Mₖ₊₂', color:'#F97316', desc:'Deletion in the query — skip one profile position without consuming a residue' },
+              ].map(t => (
+                <div key={t.path} style={{ background:'#F8FAFC', borderRadius:8, padding:'10px 12px', borderLeft:`3px solid ${t.color}` }}>
+                  <code style={{ fontSize:13, fontWeight:700, color:t.color, display:'block', marginBottom:4 }}>{t.path}</code>
+                  <span style={{ fontSize:12, color:'#475569', lineHeight:1.5 }}>{t.desc}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════════
+       TAB 2 — Profile Builder (MSA → profile)
+    ══════════════════════════════════════════════════════════════════════════ */
+    // Top-5 amino acids by frequency at each match state (for bar chart)
+    const TOP_AAs = [
+      [['L',0.683],['M',0.171],['V',0.048],['I',0.044],['A',0.014]],
+      [['K',0.695],['R',0.168],['H',0.036],['Q',0.024],['N',0.017]],
+      [['H',0.671],['Y',0.172],['F',0.033],['W',0.022],['N',0.017]],
+      [['C',0.836],['S',0.030],['A',0.018],['T',0.018],['V',0.017]],
+      [['P',0.695],['A',0.168],['G',0.042],['S',0.028],['T',0.020]],
+    ];
+
+    function EmissionBar({ stateIdx }) {
+      const pairs = TOP_AAs[stateIdx];
+      const maxFreq = pairs[0][1];
+      return (
+        <div style={{ paddingTop:6 }}>
+          {pairs.map(([aa, freq]) => (
+            <div key={aa} style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
+              <span style={{
+                width:20, height:20, borderRadius:4, display:'flex', alignItems:'center',
+                justifyContent:'center', fontWeight:700, fontSize:11,
+                background: AA_BG[aa] || '#F1F5F9', color: AA_FG[aa] || '#475569',
+                flexShrink:0,
+              }}>{aa}</span>
+              <div style={{ flex:1, background:'#F1F5F9', borderRadius:99, height:12, overflow:'hidden' }}>
+                <div style={{
+                  width:`${(freq/maxFreq)*100}%`, height:'100%', borderRadius:99,
+                  background: AA_BG[aa] || '#e8f4f6',
+                  border:`1px solid ${AA_FG[aa] || '#2a7f8a'}40`,
+                }} />
+              </div>
+              <span style={{ fontFamily:'monospace', fontSize:11, color:'#475569', minWidth:36, textAlign:'right' }}>
+                {(freq*100).toFixed(1)}%
+              </span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function ProfilePanel() {
+      const [activeCol, setActiveCol] = useState(null);
+      const [showTrans, setShowTrans] = useState(false);
+
+      const matchIndices = COL_ROLES.map((r,i) => r === 'M' ? i : null).filter(i => i !== null);
+      const matchStates = matchIndices.map((ci, mi) => ({
+        colIdx: ci, stateIdx: mi, label: `M${mi+1}`,
+        residues: MSA_SEQS.map(s => s.res[ci]),
+      }));
+
+      return (
+        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+
+          {/* Explainer */}
+          <div style={{ background:'white', borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+            <h3 style={{ fontSize:15, fontWeight:700, color:'#1E293B', margin:'0 0 8px' }}>
+              From Alignment to Profile HMM
+            </h3>
+            <p style={{ fontSize:13, color:'#475569', lineHeight:1.7, margin:'0 0 8px' }}>
+              HMMER builds a profile HMM from a multiple sequence alignment (MSA).
+              The first step is deciding which alignment columns become <strong>match states</strong>
+              and which become <strong>insert columns</strong>.
+            </p>
+            <div style={{ background:'#e8f4f6', borderRadius:8, padding:'10px 14px', fontSize:13, color:'#1e5f6a', fontWeight:600 }}>
+              Default rule: if &lt; 50 % of sequences have a gap in a column → <strong>Match state</strong>.
+              If ≥ 50 % gaps → <strong>Insert column</strong>.
+            </div>
+          </div>
+
+          {/* MSA table */}
+          <div style={{ background:'white', borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+            <p style={{ fontSize:11, fontWeight:700, color:'#64748B', margin:'0 0 10px' }}>
+              TRAINING ALIGNMENT — click a column to inspect it
+            </p>
+            <div style={{ overflowX:'auto' }}>
+              <table style={{ borderCollapse:'collapse', fontSize:13 }}>
+                <thead>
+                  <tr>
+                    <th style={{ padding:'4px 10px', fontSize:11, color:'#64748B', fontWeight:700, textAlign:'left' }}>Seq</th>
+                    {COL_ROLES.map((role, ci) => (
+                      <th key={ci} onClick={() => setActiveCol(activeCol === ci ? null : ci)}
+                        style={{
+                          padding:'4px 8px', fontSize:11, fontWeight:700, cursor:'pointer',
+                          color: role === 'M' ? '#2a7f8a' : '#3B82F6',
+                          borderBottom: activeCol === ci ? '3px solid #2a7f8a' : '3px solid transparent',
+                        }}>
+                        {COL_LABELS[ci]}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {MSA_SEQS.map(seq => (
+                    <tr key={seq.name}>
+                      <td style={{ padding:'4px 10px', fontSize:12, color:'#64748B', fontWeight:600 }}>{seq.name}</td>
+                      {seq.res.map((aa, ci) => (
+                        <td key={ci} onClick={() => setActiveCol(activeCol === ci ? null : ci)}
+                          style={{
+                            padding:'2px 4px', textAlign:'center', cursor:'pointer',
+                            opacity: activeCol !== null && activeCol !== ci ? 0.35 : 1,
+                            transition:'opacity 0.15s',
+                          }}>
+                          <span style={{
+                            display:'inline-block', width:30, height:30, lineHeight:'30px',
+                            borderRadius:6, fontWeight:700, fontSize:13,
+                            background: AA_BG[aa] || '#F1F5F9',
+                            color: AA_FG[aa] || '#475569',
+                            border: activeCol === ci ? '2px solid #2a7f8a' : '2px solid transparent',
+                          }}>{aa}</span>
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                  {/* Column role row */}
+                  <tr>
+                    <td style={{ padding:'6px 10px', fontSize:11, color:'#94A3B8', fontWeight:700 }}>Role</td>
+                    {COL_ROLES.map((role, ci) => (
+                      <td key={ci} style={{ padding:'4px 4px', textAlign:'center' }}>
+                        <span style={{
+                          display:'inline-block', padding:'2px 6px', borderRadius:6, fontSize:10, fontWeight:700,
+                          background: role==='M' ? '#e8f4f6' : '#DBEAFE',
+                          color: role==='M' ? '#2a7f8a' : '#1D4ED8',
+                        }}>{role==='M' ? 'Match' : 'Insert'}</span>
+                      </td>
+                    ))}
+                  </tr>
+                  {/* Gap % row */}
+                  <tr>
+                    <td style={{ padding:'4px 10px', fontSize:11, color:'#94A3B8', fontWeight:700 }}>Gap %</td>
+                    {COL_ROLES.map((role, ci) => {
+                      const gaps = MSA_SEQS.filter(s => s.res[ci] === '-').length;
+                      const pct  = Math.round(gaps / MSA_SEQS.length * 100);
+                      return (
+                        <td key={ci} style={{ padding:'4px 4px', textAlign:'center', fontSize:11,
+                          color: pct >= 50 ? '#3B82F6' : '#64748B', fontWeight: pct >= 50 ? 700 : 400 }}>
+                          {pct}%
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            {activeCol !== null && (
+              <div style={{ marginTop:12, background:'#F8FAFC', borderRadius:8, padding:'10px 14px', fontSize:13, color:'#475569' }}>
+                <strong style={{ color:'#1E293B' }}>Column {activeCol+1}:</strong>{' '}
+                {COL_ROLES[activeCol] === 'M'
+                  ? `This is match column → becomes ${COL_LABELS[activeCol]}. Residues: ${MSA_SEQS.map(s=>s.res[activeCol]).join(', ')}.`
+                  : `This is an insert column (${MSA_SEQS.filter(s=>s.res[activeCol]==='-').length}/${MSA_SEQS.length} gaps). Residues here contribute to insert-state emission frequencies.`}
+              </div>
+            )}
+          </div>
+
+          {/* Emission probability bars */}
+          <div style={{ background:'white', borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+            <p style={{ fontSize:11, fontWeight:700, color:'#64748B', margin:'0 0 12px' }}>
+              MATCH-STATE EMISSION PROBABILITIES (top 5 amino acids per state, with pseudocounts)
+            </p>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:12 }}>
+              {matchStates.map(({ label, stateIdx }) => (
+                <div key={stateIdx} style={{ background:'#F8FAFC', borderRadius:8, padding:'10px 12px', border:'1px solid #E2E8F0' }}>
+                  <p style={{ fontSize:13, fontWeight:700, color:'#2a7f8a', margin:'0 0 4px', fontFamily:'monospace' }}>{label}</p>
+                  <EmissionBar stateIdx={stateIdx} />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Transition probabilities */}
+          <div style={{ background:'white', borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+              <p style={{ fontSize:11, fontWeight:700, color:'#64748B', margin:0 }}>TRANSITION PROBABILITIES</p>
+              <button onClick={() => setShowTrans(!showTrans)} style={{
+                padding:'5px 10px', fontSize:11, borderRadius:6, cursor:'pointer',
+                border: showTrans ? '2px solid #2a7f8a' : '1px solid #E2E8F0',
+                background: showTrans ? '#e8f4f6' : 'white',
+                color: showTrans ? '#2a7f8a' : '#64748B', fontWeight:600,
+              }}>{showTrans ? 'Hide' : 'Show table'}</button>
+            </div>
+            {showTrans && (
+              <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+                <thead>
+                  <tr style={{ borderBottom:'2px solid #E2E8F0' }}>
+                    {['State','M→M','M→I','M→D'].map(h => (
+                      <th key={h} style={{ padding:'7px 10px', textAlign: h==='State'?'left':'center', fontSize:11, fontWeight:700, color:'#64748B' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {TRANS_MM.map((mm, k) => (
+                    <tr key={k} style={{ borderBottom:'1px solid #F1F5F9' }}>
+                      <td style={{ padding:'7px 10px', fontFamily:'monospace', fontWeight:700, color:'#2a7f8a' }}>M{k+1}</td>
+                      <td style={{ padding:'7px 10px', textAlign:'center' }}>
+                        <span style={{ background:'#ECFDF5', color:'#065F46', padding:'2px 7px', borderRadius:5, fontSize:12, fontWeight:600 }}>{mm.toFixed(2)}</span>
+                      </td>
+                      <td style={{ padding:'7px 10px', textAlign:'center' }}>
+                        <span style={{ background:'#DBEAFE', color:'#1E40AF', padding:'2px 7px', borderRadius:5, fontSize:12, fontWeight:600 }}>{TRANS_MI[k].toFixed(2)}</span>
+                      </td>
+                      <td style={{ padding:'7px 10px', textAlign:'center' }}>
+                        <span style={{ background:'#FFF7ED', color:'#C2410C', padding:'2px 7px', borderRadius:5, fontSize:12, fontWeight:600 }}>{TRANS_MD[k].toFixed(2)}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {!showTrans && (
+              <p style={{ fontSize:12, color:'#94A3B8', margin:0, lineHeight:1.6 }}>
+                The table shows P(Mₖ→Mₖ₊₁), P(Mₖ→Iₖ), P(Mₖ→Dₖ₊₁) for each match state. Note M3 has
+                elevated M→I (0.20) because Seq5 contributes an insertion after position 3.
+              </p>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════════
+       TAB 3 — Viterbi / Score Matrix
+    ══════════════════════════════════════════════════════════════════════════ */
+    function ViterbiPanel() {
+      const [qPreset, setQPreset]   = useState(0);
+      const [customQ, setCustomQ]   = useState('LKHCP');
+      const [isCustom, setIsCustom] = useState(false);
+      const [step, setStep]         = useState(0); // 0 = nothing revealed, 1-5 = columns revealed
+      const [showCumul, setShowCumul] = useState(false);
+
+      const rawSeq = isCustom ? customQ.toUpperCase().slice(0,5) : QUERIES[qPreset].seq;
+      const seq    = rawSeq.padEnd(5, '?').slice(0,5).split('');
+
+      // Per-cell scores (5 states × 5 query positions)
+      const scores = useMemo(() =>
+        Array.from({length:5}, (_,k) =>
+          Array.from({length:5}, (_,j) => {
+            const aa = seq[j];
+            return /^[ACDEFGHIKLMNPQRSTVWY]$/.test(aa) ? (LOG_ODDS[k]?.[aa] ?? -3.0) : null;
+          })
+        ), [seq.join('')]
+      );
+
+      // Cumulative scores along the diagonal (Viterbi path, match-only)
+      const cumul = useMemo(() => {
+        const c = [];
+        let sum = 0;
+        for (let k = 0; k < 5; k++) {
+          const s = scores[k][k];
+          const trans = k > 0 ? Math.log2(TRANS_MM[k-1]) : 0;
+          sum += (s ?? 0) + trans;
+          c.push({ raw: s, trans, cumul: sum });
+        }
+        return c;
+      }, [scores]);
+
+      const totalBits = cumul[4]?.cumul ?? 0;
+
+      const bitLabel = (b) => {
+        if (b > 40) return { label:'Very strong match', color:'#059669' };
+        if (b > 20) return { label:'Strong match', color:'#16A34A' };
+        if (b > 10) return { label:'Moderate match', color:'#D97706' };
+        if (b >  0) return { label:'Weak match', color:'#EA580C' };
+        return { label:'Poor match (likely unrelated)', color:'#DC2626' };
+      };
+
+      const resetStep = () => setStep(0);
+
+      return (
+        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+
+          {/* Concept card */}
+          <div style={{ background:'white', borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+            <h3 style={{ fontSize:15, fontWeight:700, color:'#1E293B', margin:'0 0 8px' }}>
+              Scoring a Sequence Against the Profile
+            </h3>
+            <p style={{ fontSize:13, color:'#475569', lineHeight:1.7, margin:0 }}>
+              HMMER aligns each database sequence to the profile HMM using the{' '}
+              <strong>Viterbi algorithm</strong> — a dynamic-programming approach that
+              finds the highest-probability path through the HMM states. The core of the score
+              is a <strong>log-odds ratio</strong> at each match position:{' '}
+              <code style={{ background:'#F1F5F9', padding:'1px 5px', borderRadius:4 }}>
+                log₂( p(aa | profile) / p(aa | background) )
+              </code>.
+              Positive values mean the amino acid is enriched at this position; negative means
+              it is depleted. The <strong>bit score</strong> is the sum of log-odds values along
+              the optimal path (plus log-odds of transition probabilities).
+            </p>
+          </div>
+
+          {/* Controls */}
+          <div style={{ background:'white', borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+            <p style={{ fontSize:11, fontWeight:700, color:'#64748B', margin:'0 0 8px' }}>CHOOSE QUERY SEQUENCE (5 residues)</p>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:12 }}>
+              {QUERIES.map((q,i) => (
+                <button key={i} onClick={() => { setQPreset(i); setIsCustom(false); resetStep(); }} style={{
+                  padding:'5px 10px', fontSize:11, borderRadius:6, cursor:'pointer',
+                  border: !isCustom && qPreset===i ? '2px solid #2a7f8a' : '1px solid #E2E8F0',
+                  background: !isCustom && qPreset===i ? '#e8f4f6' : 'white',
+                  color: !isCustom && qPreset===i ? '#2a7f8a' : '#64748B', fontWeight:600,
+                }}>{q.label}</button>
+              ))}
+              <button onClick={() => { setIsCustom(true); resetStep(); }} style={{
+                padding:'5px 10px', fontSize:11, borderRadius:6, cursor:'pointer',
+                border: isCustom ? '2px solid #2a7f8a' : '1px solid #E2E8F0',
+                background: isCustom ? '#e8f4f6' : 'white',
+                color: isCustom ? '#2a7f8a' : '#64748B', fontWeight:600,
+              }}>Custom</button>
+            </div>
+            {isCustom && (
+              <div style={{ marginBottom:12 }}>
+                <input value={customQ} onChange={e => { setCustomQ(e.target.value); resetStep(); }}
+                  maxLength={5} placeholder="Up to 5 amino acids"
+                  style={{ padding:'7px 10px', border:'2px solid #E2E8F0', borderRadius:8,
+                    fontFamily:'monospace', fontSize:14, fontWeight:700, width:180, letterSpacing:3,
+                    color:'#1E293B', outline:'none', textTransform:'uppercase' }} />
+                <span style={{ fontSize:11, color:'#94A3B8', marginLeft:8 }}>
+                  Single-letter codes, e.g. LKHCP
+                </span>
+              </div>
+            )}
+
+            {/* Step controls */}
+            <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+              <button onClick={() => setStep(s => Math.min(s+1, 5))} disabled={step >= 5}
+                style={{
+                  padding:'8px 16px', fontSize:12, fontWeight:700, borderRadius:8, cursor:'pointer',
+                  border:'none', background: step >= 5 ? '#CBD5E1' : '#2a7f8a', color:'white',
+                }}>
+                {step === 0 ? '▶ Start scoring' : step < 5 ? `Score position ${step+1} →` : '✓ Complete'}
+              </button>
+              <button onClick={() => { resetStep(); }} style={{
+                padding:'8px 16px', fontSize:12, fontWeight:700, borderRadius:8, cursor:'pointer',
+                border:'2px solid #FCA5A5', background:'white', color:'#DC2626',
+              }}>↺ Reset</button>
+              {step > 0 && (
+                <button onClick={() => setShowCumul(!showCumul)} style={{
+                  padding:'8px 16px', fontSize:12, fontWeight:700, borderRadius:8, cursor:'pointer',
+                  border: showCumul ? '2px solid #2a7f8a' : '1px solid #E2E8F0',
+                  background: showCumul ? '#e8f4f6' : 'white',
+                  color: showCumul ? '#2a7f8a' : '#64748B',
+                }}>
+                  {showCumul ? 'Hide' : 'Show'} cumulative path
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Score matrix */}
+          <div style={{ background:'white', borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)', overflowX:'auto' }}>
+            <p style={{ fontSize:11, fontWeight:700, color:'#64748B', margin:'0 0 12px' }}>
+              LOG-ODDS SCORE MATRIX — rows = match states, columns = query residues
+            </p>
+            <table style={{ borderCollapse:'collapse', minWidth:400 }}>
+              <thead>
+                <tr>
+                  <th style={{ padding:'6px 12px', fontSize:11, color:'#64748B', fontWeight:700 }}></th>
+                  {seq.map((aa, j) => (
+                    <th key={j} style={{ padding:'6px 12px', textAlign:'center', minWidth:72 }}>
+                      <span style={{
+                        display:'inline-block', width:28, height:28, lineHeight:'28px',
+                        borderRadius:6, fontWeight:700, fontSize:13, textAlign:'center',
+                        background: AA_BG[aa] || '#F1F5F9', color: AA_FG[aa] || '#475569',
+                        opacity: step > j ? 1 : 0.3, transition:'opacity 0.2s',
+                      }}>{aa}</span>
+                      <div style={{ fontSize:10, color:'#94A3B8', marginTop:2 }}>pos {j+1}</div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {[0,1,2,3,4].map(k => (
+                  <tr key={k} style={{ borderTop:'1px solid #F1F5F9' }}>
+                    <td style={{ padding:'8px 12px', fontFamily:'monospace', fontWeight:700, color:'#2a7f8a', whiteSpace:'nowrap' }}>
+                      M{k+1}
+                      <span style={{ fontSize:10, color:'#94A3B8', marginLeft:6, fontFamily:'sans-serif', fontWeight:400 }}>
+                        {['(L/M)','(K/R)','(H/Y)','(C)','(P/A)'][k]}
+                      </span>
+                    </td>
+                    {scores[k].map((s, j) => {
+                      const onPath   = k === j;
+                      const revealed = step > j;
+                      const bg       = revealed ? scoreColor(s) : '#F8FAFC';
+                      const fg       = revealed ? scoreFg(s)    : '#CBD5E1';
+                      const isCurrent = step === j + 1;
+                      return (
+                        <td key={j} style={{
+                          padding:'6px 8px', textAlign:'center',
+                          background: showCumul && onPath && revealed ? '#FEF3C7' : bg,
+                          border: isCurrent && onPath ? '2px solid #F59E0B'
+                               : showCumul && onPath && revealed ? '2px solid #F59E0B'
+                               : '2px solid transparent',
+                          borderRadius:6, transition:'background 0.2s',
+                        }}>
+                          <span style={{ fontFamily:'monospace', fontWeight:700, fontSize:14, color: revealed ? fg : '#E2E8F0' }}>
+                            {revealed ? fmt(s) : '·'}
+                          </span>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {/* Legend */}
+            <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginTop:14, alignItems:'center' }}>
+              {[['≥ +4','#16A34A','#fff'],['≥ +2','#4ADE80','#14532D'],['≥ 0','#BBF7D0','#166534'],['< 0','#FECACA','#7F1D1D'],['≪ 0','#F87171','#fff']].map(([lbl,bg,fg]) => (
+                <span key={lbl} style={{ background:bg, color:fg, padding:'2px 8px', borderRadius:6, fontSize:11, fontWeight:700 }}>{lbl} bits</span>
+              ))}
+              {showCumul && <span style={{ background:'#FEF3C7', color:'#92400E', padding:'2px 8px', borderRadius:6, fontSize:11, fontWeight:700, border:'1px solid #F59E0B' }}>Viterbi path diagonal</span>}
+            </div>
+          </div>
+
+          {/* Cumulative path breakdown */}
+          {step >= 5 && (
+            <div style={{ background:'white', borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+              <p style={{ fontSize:11, fontWeight:700, color:'#64748B', margin:'0 0 12px' }}>
+                VITERBI PATH SCORE BREAKDOWN (match-only path, no gaps)
+              </p>
+              <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+                <thead>
+                  <tr style={{ borderBottom:'2px solid #E2E8F0' }}>
+                    {['Step','State → Residue','log-odds (emit)','log-odds (trans)','Running total'].map(h => (
+                      <th key={h} style={{ padding:'7px 10px', textAlign:'left', fontSize:11, fontWeight:700, color:'#64748B' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {cumul.map((c, k) => (
+                    <tr key={k} style={{ borderBottom:'1px solid #F1F5F9' }}>
+                      <td style={{ padding:'7px 10px', color:'#94A3B8', fontFamily:'monospace' }}>{k+1}</td>
+                      <td style={{ padding:'7px 10px' }}>
+                        <span style={{ fontFamily:'monospace', fontWeight:700, color:'#2a7f8a' }}>M{k+1}</span>
+                        <span style={{ color:'#94A3B8', margin:'0 4px' }}>→</span>
+                        <span style={{
+                          display:'inline-block', width:22, height:22, lineHeight:'22px',
+                          borderRadius:4, fontWeight:700, fontSize:12, textAlign:'center',
+                          background: AA_BG[seq[k]] || '#F1F5F9', color: AA_FG[seq[k]] || '#475569',
+                        }}>{seq[k]}</span>
+                      </td>
+                      <td style={{ padding:'7px 10px', fontFamily:'monospace', fontWeight:600,
+                        color: (c.raw ?? 0) >= 0 ? '#059669' : '#DC2626' }}>
+                        {fmt(c.raw)}
+                      </td>
+                      <td style={{ padding:'7px 10px', fontFamily:'monospace', color:'#475569' }}>
+                        {k === 0 ? '—' : c.trans.toFixed(2)}
+                      </td>
+                      <td style={{ padding:'7px 10px', fontFamily:'monospace', fontWeight:700,
+                        color: c.cumul >= 0 ? '#1E293B' : '#DC2626' }}>
+                        {c.cumul.toFixed(1)} bits
+                      </td>
+                    </tr>
+                  ))}
+                  <tr style={{ background:'#F8FAFC', borderTop:'2px solid #E2E8F0' }}>
+                    <td colSpan={4} style={{ padding:'10px 10px', fontWeight:700, color:'#1E293B', fontSize:13 }}>
+                      Total bit score
+                    </td>
+                    <td style={{ padding:'10px 10px', fontFamily:'monospace', fontWeight:800, fontSize:15,
+                      color: bitLabel(totalBits).color }}>
+                      {totalBits.toFixed(1)} bits
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <div style={{
+                marginTop:12, padding:'10px 14px', borderRadius:8, fontSize:13, fontWeight:600,
+                background: bitLabel(totalBits).color + '14',
+                color: bitLabel(totalBits).color,
+              }}>
+                Interpretation: <strong>{bitLabel(totalBits).label}</strong>
+                {totalBits > 10 && <span style={{ fontWeight:400, color:'#475569' }}>
+                  {' '}— In HMMER, bit scores above ~15–20 with E-value &lt; 0.001 are typically considered significant evidence of homology.
+                </span>}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════════
+       TAB 4 — Quiz
+    ══════════════════════════════════════════════════════════════════════════ */
+    function QuizPanel() {
+      const [qIdx,    setQIdx]    = useState(0);
+      const [chosen,  setChosen]  = useState(null);
+      const [score,   setScore]   = useState(0);
+      const [answers, setAnswers] = useState([]);
+      const [done,    setDone]    = useState(false);
+
+      const q        = QUIZ[qIdx];
+      const answered = chosen !== null;
+      const correct  = chosen === q.answer;
+
+      const choose = idx => {
+        if (answered) return;
+        setChosen(idx);
+        if (idx === q.answer) setScore(s => s + 1);
+        setAnswers(a => [...a, { chosen: idx, ok: idx === q.answer }]);
+      };
+      const next = () => {
+        if (qIdx + 1 >= QUIZ.length) setDone(true);
+        else { setQIdx(i => i+1); setChosen(null); }
+      };
+      const reset = () => { setQIdx(0); setChosen(null); setScore(0); setAnswers([]); setDone(false); };
+
+      if (done) {
+        const pct = Math.round(score / QUIZ.length * 100);
+        return (
+          <div style={{ background:'white', borderRadius:12, padding:32, boxShadow:'0 1px 3px rgba(0,0,0,0.08)', textAlign:'center' }}>
+            <div style={{ fontSize:52, marginBottom:12 }}>
+              {pct===100?'🎉': pct>=75?'🌟': pct>=50?'📚':'🔄'}
+            </div>
+            <h2 style={{ fontSize:22, fontWeight:800, color:'#1E293B', margin:'0 0 8px' }}>
+              {score} / {QUIZ.length} correct ({pct}%)
+            </h2>
+            <p style={{ color:'#64748B', fontSize:14, marginBottom:24, lineHeight:1.6 }}>
+              {pct===100 ? 'Perfect! You understand profile HMMs and HMMER thoroughly.' :
+               pct>=75   ? 'Great work! Review the Architecture and Profile tabs to fill the gaps.' :
+               pct>=50   ? 'Good start. Try stepping through the Viterbi tab and re-reading the architecture descriptions.' :
+               'Keep going — revisit all three tabs and try again.'}
+            </p>
+            <div style={{ textAlign:'left', marginBottom:24 }}>
+              {QUIZ.map((q,i) => (
+                <div key={i} style={{ display:'flex', gap:10, padding:'8px 0', borderBottom:'1px solid #F1F5F9', fontSize:13 }}>
+                  <span style={{ fontSize:16, flexShrink:0 }}>{answers[i]?.ok ? '✅' : '❌'}</span>
+                  <div>
+                    <div style={{ fontWeight:600, color:'#1E293B', marginBottom:2 }}>Q{i+1}: {q.choices[q.answer]}</div>
+                    {!answers[i]?.ok && (
+                      <div style={{ fontSize:12, color:'#EF4444' }}>Your answer: {q.choices[answers[i]?.chosen ?? -1] ?? '—'}</div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button onClick={reset} style={{
+              padding:'10px 28px', fontSize:14, fontWeight:700, borderRadius:8,
+              border:'none', background:'#2a7f8a', color:'white', cursor:'pointer',
+            }}>Try Again</button>
+          </div>
+        );
+      }
+
+      return (
+        <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+          {/* Progress */}
+          <div style={{ background:'white', borderRadius:12, padding:'12px 20px', boxShadow:'0 1px 3px rgba(0,0,0,0.08)', display:'flex', alignItems:'center', gap:14 }}>
+            <div style={{ flex:1, background:'#F1F5F9', borderRadius:99, height:8, overflow:'hidden' }}>
+              <div style={{ width:`${(qIdx/QUIZ.length)*100}%`, height:'100%', background:'#2a7f8a', borderRadius:99, transition:'width 0.3s' }} />
+            </div>
+            <span style={{ fontSize:12, fontWeight:700, color:'#64748B', whiteSpace:'nowrap' }}>
+              {qIdx+1} / {QUIZ.length} — Score: {score}
+            </span>
+          </div>
+
+          {/* Question */}
+          <div style={{ background:'white', borderRadius:12, padding:24, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+            <p style={{ fontSize:11, fontWeight:700, color:'#64748B', margin:'0 0 10px' }}>QUESTION {qIdx+1} OF {QUIZ.length}</p>
+            <p style={{ fontSize:15, fontWeight:600, color:'#1E293B', lineHeight:1.65, margin:'0 0 20px' }}>{q.q}</p>
+            <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:20 }}>
+              {q.choices.map((ch, idx) => {
+                let bg='white', border='#E2E8F0', clr='#1E293B';
+                if (answered) {
+                  if (idx === q.answer) { bg='#ECFDF5'; border='#10B981'; clr='#065F46'; }
+                  else if (idx === chosen) { bg='#FEF2F2'; border='#EF4444'; clr='#7F1D1D'; }
+                  else clr='#94A3B8';
+                }
+                const letter = answered
+                  ? (idx===q.answer ? '✓' : idx===chosen ? '✗' : String.fromCharCode(65+idx))
+                  : String.fromCharCode(65+idx);
+                return (
+                  <button key={idx} onClick={() => choose(idx)} disabled={answered} style={{
+                    padding:'11px 16px', borderRadius:8, cursor: answered?'default':'pointer',
+                    border:`2px solid ${border}`, background:bg, color:clr,
+                    fontWeight:600, fontSize:14, textAlign:'left', display:'flex', alignItems:'center', gap:10,
+                    fontFamily:"'Nunito Sans',sans-serif", transition:'all 0.15s',
+                  }}>
+                    <span style={{ fontFamily:'monospace', fontSize:14, minWidth:16, textAlign:'center' }}>{letter}</span>
+                    <span>{ch}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {answered && (
+              <div style={{
+                background: correct?'#ECFDF5':'#FEF2F2',
+                border:`1px solid ${correct?'#A7F3D0':'#FECACA'}`,
+                borderRadius:8, padding:'12px 16px', marginBottom:16, fontSize:13, lineHeight:1.65,
+              }}>
+                <span style={{ fontWeight:700, color: correct?'#065F46':'#7F1D1D' }}>
+                  {correct ? '✓ Correct! ' : '✗ Not quite. '}
+                </span>
+                <span style={{ color:'#475569' }}>{q.explanation}</span>
+              </div>
+            )}
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <button onClick={reset} style={{
+                padding:'8px 16px', fontSize:12, fontWeight:700, borderRadius:8,
+                border:'2px solid #FCA5A5', background:'white', color:'#DC2626', cursor:'pointer',
+              }}>↺ Restart</button>
+              {answered && (
+                <button onClick={next} style={{
+                  padding:'10px 24px', fontSize:14, fontWeight:700, borderRadius:8,
+                  border:'none', background:'#2a7f8a', color:'white', cursor:'pointer',
+                }}>
+                  {qIdx+1 >= QUIZ.length ? 'See Results' : 'Next →'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════════
+       App
+    ══════════════════════════════════════════════════════════════════════════ */
+    const App = function HMMWidget() {
+      const [tab, setTab] = useState('arch');
+      const TABS = [
+        { id:'arch',    label:'🔵 HMM Architecture' },
+        { id:'profile', label:'🧬 Profile Builder' },
+        { id:'viterbi', label:'🔢 Viterbi Scoring' },
+        { id:'quiz',    label:'🎯 Knowledge Check' },
+      ];
+      return (
+        <div style={{
+          fontFamily:"'Nunito Sans',-apple-system,sans-serif",
+          maxWidth:920, margin:'0 auto', padding:'20px 16px 48px',
+          background:'#f8f9fa', minHeight:'100vh',
+        }}>
+          <div style={{ textAlign:'center', marginBottom:20 }}>
+            <h1 style={{ fontSize:24, fontWeight:800, color:'#0F172A', margin:0 }}>
+              🔵 Hidden Markov Models &amp; HMMER
+            </h1>
+            <p style={{ fontSize:13, color:'#64748B', margin:'6px 0 0' }}>
+              BSB511 / BENG451 — Profile HMM architecture, Viterbi scoring &amp; homology search
+            </p>
+          </div>
+
+          {/* Tab bar */}
+          <div style={{ display:'flex', gap:6, marginBottom:20, background:'white', borderRadius:10, padding:6, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+            {TABS.map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)} style={{
+                flex:1, padding:'9px 6px', fontSize:11, fontWeight:700, borderRadius:7,
+                cursor:'pointer', border:'none',
+                background: tab===t.id ? '#2a7f8a' : 'transparent',
+                color: tab===t.id ? 'white' : '#64748B', transition:'all 0.15s',
+              }}>{t.label}</button>
+            ))}
+          </div>
+
+          {tab === 'arch'    && <ArchitecturePanel />}
+          {tab === 'profile' && <ProfilePanel />}
+          {tab === 'viterbi' && <ViterbiPanel />}
+          {tab === 'quiz'    && <QuizPanel />}
+
+          <div style={{ textAlign:'center', marginTop:24, fontSize:11, color:'#94A3B8' }}>
+            BSB511 / BENG451 — Bioinformatics Fundamentals — Hidden Markov Models &amp; HMMER
+          </div>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
