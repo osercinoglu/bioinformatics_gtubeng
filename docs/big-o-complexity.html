@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Big-O &amp; Algorithm Complexity — BSB511 / BENG451</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Nunito+Sans:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; font-family: 'Nunito Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    h1, h2, h3, h4, h5, h6 { font-family: 'Nunito', system-ui, sans-serif; }
+    .back-link {
+      position: fixed; top: 12px; left: 12px; z-index: 1000;
+      padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 700;
+      background: white; color: #2a7f8a; text-decoration: none;
+      border: 1px solid #b8dce2; font-family: 'Nunito Sans', sans-serif; transition: all 0.2s ease-in-out;
+    }
+    .back-link:hover { background: #e8f4f6; color: #1e5f6a; border-color: #2a7f8a; }
+  </style>
+</head>
+<body>
+  <a href="index.html" class="back-link">← All Widgets</a>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useMemo, useCallback } = React;
+
+    /* ── Complexity class definitions ───────────────────────────────────────── */
+    const CLASSES = [
+      { id: "O1",     label: "O(1)",       color: "#10B981", fn: n => 1,               desc: "Constant" },
+      { id: "Ologn",  label: "O(log n)",   color: "#3B82F6", fn: n => Math.log2(n),    desc: "Logarithmic" },
+      { id: "On",     label: "O(n)",       color: "#F59E0B", fn: n => n,               desc: "Linear" },
+      { id: "Onlogn", label: "O(n log n)", color: "#F97316", fn: n => n * Math.log2(n),desc: "Linearithmic" },
+      { id: "On2",    label: "O(n²)",      color: "#EF4444", fn: n => n * n,           desc: "Quadratic" },
+      { id: "On3",    label: "O(n³)",      color: "#8B5CF6", fn: n => n * n * n,       desc: "Cubic" },
+      { id: "O2n",    label: "O(2ⁿ)",      color: "#EC4899", fn: n => Math.pow(2, n),  desc: "Exponential" },
+    ];
+
+    /* ── Bioinformatics algorithms, ordered by complexity class ─────────────── */
+    const ALGOS = [
+      {
+        cls: "O(1)", name: "BLAST word (seed) lookup", icon: "🔑",
+        short: "Retrieving k-mer hit positions from a pre-built hash index",
+        detail: "BLAST pre-indexes all k-letter words from the database into a hash table. Looking up a single query word is O(1) on average — constant time regardless of database size. This seeding step is what makes BLAST practical; the costly SW extension only runs on the small fraction of high-scoring seeds.",
+      },
+      {
+        cls: "O(1)", name: "Indexed FASTA record retrieval", icon: "📦",
+        short: "Fetching a sequence by ID using samtools faidx",
+        detail: "samtools faidx builds a tiny index mapping each sequence ID to its byte offset in the FASTA file. Retrieval is O(1): read the index entry, seek to the offset, read the record. Without the index, finding a sequence would require scanning the entire file — O(file size).",
+      },
+      {
+        cls: "O(log n)", name: "Binary search in a sorted gene list", icon: "🔍",
+        short: "Finding a gene by name in an alphabetically sorted array",
+        detail: "With 30,000 human genes, binary search needs at most ⌈log₂(30,000)⌉ = 15 comparisons. Each step halves the search space. Genome browsers use binary search on sorted coordinate arrays to jump directly to a genomic region in O(log n) time.",
+      },
+      {
+        cls: "O(log n)", name: "Tabix / BEDTools indexed range query", icon: "🗺️",
+        short: "Finding overlapping genomic intervals in a sorted, indexed BED/VCF file",
+        detail: "Tabix builds a B-tree index over genomic coordinates. A range query binary-searches to the first overlapping record in O(log n), then streams linearly through the results. Without an index, answering 'what features overlap position X?' would require a full file scan — O(file size).",
+      },
+      {
+        cls: "O(n)", name: "GC content calculation", icon: "🧬",
+        short: "Counting G and C bases in a sequence of length n",
+        detail: "A single left-to-right scan touches each nucleotide exactly once. For a 3 Gbp human genome: ~3×10⁹ operations, completing in under 10 s. This is the best possible complexity for any problem that must read every character at least once.",
+      },
+      {
+        cls: "O(n)", name: "FASTA diagonal scoring (phase 1)", icon: "📊",
+        short: "Scoring k-tuple matches along diagonals (the fast FASTA pre-filter)",
+        detail: "FASTA's first phase scans query and subject sequences to find shared k-tuples and score their diagonal runs — O(n) per sequence pair. Only diagonals with high scores are extended with Smith-Waterman in a narrow band. This two-phase design avoids the full O(n²) cost for most database entries.",
+      },
+      {
+        cls: "O(n)", name: "Read quality trimming (Trimmomatic)", icon: "✂️",
+        short: "Sliding-window quality scan over a sequencing read",
+        detail: "Trimmomatic's sliding window moves left-to-right through the read: O(read length). Processing a full FASTQ file with R reads is O(R × L) where L is average read length. Quality trimming is a strictly linear bottleneck in most preprocessing pipelines.",
+      },
+      {
+        cls: "O(n log n)", name: "SAM/BAM coordinate sort (samtools)", icon: "🔀",
+        short: "Sorting n aligned reads by genomic position",
+        detail: "Information theory proves that any comparison-based sort requires at least Ω(n log n) comparisons — this lower bound is tight. For 50 million reads: ~50 M × 26 ≈ 1.3×10⁹ comparisons. samtools uses an external merge sort, splitting data into sorted RAM-sized chunks and merging them.",
+      },
+      {
+        cls: "O(n log n)", name: "Suffix array / BWT construction", icon: "📐",
+        short: "Building the genome index used by BWA and Bowtie2",
+        detail: "Efficient suffix array algorithms run in O(n log n); SA-IS achieves O(n). The resulting FM-index enables O(m) exact pattern matching per read (m = read length). This index is built once per reference genome; the upfront O(n log n) cost is amortized over millions of read alignments.",
+      },
+      {
+        cls: "O(n²)", name: "Needleman-Wunsch global alignment", icon: "🧮",
+        short: "Global pairwise alignment of two sequences of length n via DP",
+        detail: "The DP matrix has (n+1)×(m+1) cells, each filled in O(1) from three neighbors. For two 1,000 bp sequences: ~10⁶ operations. For two 10,000 bp sequences: ~10⁸. Memory is also O(n·m) — Hirschberg's divide-and-conquer variant reduces space to O(n) while preserving O(n²) time.",
+      },
+      {
+        cls: "O(n²)", name: "Smith-Waterman local alignment", icon: "🔬",
+        short: "Local pairwise alignment — same DP complexity as Needleman-Wunsch",
+        detail: "Identical O(n·m) time and space as NW, but locates the highest-scoring subregion. BLAST approximates SW with heuristic seeding + band-limited extension, trading some sensitivity for dramatic speed gains and enabling full database searches in seconds rather than hours.",
+      },
+      {
+        cls: "O(n²)", name: "All-vs-all pairwise distance matrix", icon: "📏",
+        short: "Computing all pairwise alignment scores for k sequences (MSA guide tree)",
+        detail: "k(k−1)/2 ≈ k² pairs must be aligned. If each alignment is O(n²), total cost is O(k²·n²). ClustalW uses this for guide tree construction. For k=100 sequences of length 300 aa: ~4.5×10⁸ operations — feasible. For k=10,000: ~4.5×10¹¹ — impractical without heuristics.",
+      },
+      {
+        cls: "O(n³)", name: "Exact 3-sequence MSA", icon: "🧊",
+        short: "Exact DP alignment of exactly 3 sequences in a 3D matrix",
+        detail: "Exact MSA requires a k-dimensional DP table with nᵏ cells. For k=3 and n=100: 10⁶ cells — milliseconds. For k=4 and n=100: 10⁸ — borderline. For k=5: 10¹⁰ — intractable. This exponential growth with k is why progressive heuristic tools (MUSCLE, MAFFT) are used instead of exact algorithms.",
+      },
+      {
+        cls: "O(n³)", name: "RNA secondary structure prediction (Nussinov / Zuker)", icon: "🔵",
+        short: "Minimum free energy RNA folding (RNAfold, mfold)",
+        detail: "The Nussinov algorithm maximizes base-pair count: for each of the O(n²) sub-intervals [i,j], it checks all O(n) split points → O(n³). The thermodynamic Zuker algorithm used by RNAfold and mfold has the same O(n³) time, O(n²) space structure. For a 500 nt RNA: ~1.25×10⁸ operations, completing in under a second.",
+      },
+      {
+        cls: "O(2ⁿ)", name: "Exhaustive regulatory motif enumeration", icon: "💥",
+        short: "Testing all possible position subsets for a conserved motif",
+        detail: "For a 50-nt window: 2⁵⁰ ≈ 10¹⁵ possible subsets — completely intractable. The MEME suite uses Expectation-Maximization (EM) starting from a random seed, exploring a tiny fraction of this space. Gibbs Sampling is another O(n·W·k) heuristic that finds near-optimal motifs in polynomial time.",
+      },
+      {
+        cls: "O(2ⁿ)", name: "Optimal genome assembly ordering", icon: "🧩",
+        short: "Finding the Hamiltonian path through the read overlap graph",
+        detail: "Finding the globally optimal read ordering is equivalent to the Hamiltonian Path Problem — NP-complete. Real assemblers (SPAdes, Velvet, Flye) replace the overlap graph with a de Bruijn graph, reducing complexity to O(n) or O(n log n) at the cost of some optimality near repeat regions.",
+      },
+    ];
+
+    /* ── Quiz questions ─────────────────────────────────────────────────────── */
+    const QUIZ = [
+      {
+        q: "BLAST looks up a 3-letter amino acid 'word' in a pre-built hash index. The complexity of a single word lookup is:",
+        choices: ["O(1)", "O(log n)", "O(n)", "O(n²)"],
+        answer: 0,
+        explanation: "Hash tables support O(1) average-case lookup. The index maps each k-mer to its list of database positions. Individual lookups take constant time regardless of database size.",
+      },
+      {
+        q: "Counting all G and C nucleotides in a genome sequence of length n requires reading every character once. The time complexity is:",
+        choices: ["O(1)", "O(log n)", "O(n)", "O(n log n)"],
+        answer: 2,
+        explanation: "Every character must be inspected at least once — you cannot skip any nucleotide that might be G or C. Time is proportional to n: a classic linear algorithm.",
+      },
+      {
+        q: "Needleman-Wunsch fills an (n+1)×(n+1) DP matrix, with each cell computed from three neighbors in O(1). The total time complexity is:",
+        choices: ["O(n)", "O(n log n)", "O(n²)", "O(2ⁿ)"],
+        answer: 2,
+        explanation: "The matrix has (n+1)² ≈ n² cells, each filled in O(1). Total: O(n²). Memory is also O(n²) — use Hirschberg's trick to reduce space to O(n) while keeping O(n²) time.",
+      },
+      {
+        q: "samtools sort rearranges n aligned reads by genomic coordinate. The theoretically optimal complexity for comparison-based sorting is:",
+        choices: ["O(n)", "O(n log n)", "O(n²)", "O(n³)"],
+        answer: 1,
+        explanation: "Information theory proves that Ω(n log n) comparisons are necessary: sorting requires log₂(n!) bits of information. samtools uses merge sort to achieve this optimal lower bound.",
+      },
+      {
+        q: "ClustalW computes pairwise NW alignments (each O(n²)) for all k(k−1)/2 pairs before building the guide tree. The total pairwise phase complexity is:",
+        choices: ["O(k·n)", "O(k·n²)", "O(k²·n²)", "O(k!·n)"],
+        answer: 2,
+        explanation: "k(k−1)/2 ≈ k² pairs × O(n²) per NW alignment = O(k²·n²). For k=100 sequences of length 300 aa: ~4.5×10⁸ ops — feasible. For k=1,000: ~4.5×10¹⁰ — already impractical.",
+      },
+      {
+        q: "Exact multiple sequence alignment of k sequences requires a k-dimensional DP table with n entries per dimension. The time complexity is:",
+        choices: ["O(n·k)", "O(n²·k)", "O(nᵏ)", "O(kⁿ)"],
+        answer: 2,
+        explanation: "The DP table has k dimensions each of size n: nᵏ cells total. For k=3: O(n³); for k=10: O(n¹⁰). This exponential scaling with k is why exact MSA is tractable only for ≤4 sequences.",
+      },
+      {
+        q: "A researcher tests all possible subsets of positions in a 40-nt sequence to find a conserved motif. The exhaustive search complexity is:",
+        choices: ["O(n²)", "O(n!)", "O(2ⁿ)", "O(nⁿ)"],
+        answer: 2,
+        explanation: "Each of the n positions is either included or excluded: 2⁴⁰ ≈ 10¹² subsets — completely intractable. Tools like MEME and Gibbs sampling use probabilistic heuristics to find motifs in polynomial time.",
+      },
+      {
+        q: "The Nussinov RNA folding algorithm considers all O(n²) sub-intervals [i,j] and checks all O(n) split points k for each. Total complexity:",
+        choices: ["O(n)", "O(n²)", "O(n³)", "O(2ⁿ)"],
+        answer: 2,
+        explanation: "O(n²) sub-intervals × O(n) split points per sub-interval = O(n³). The Zuker MFE algorithm used by RNAfold and mfold has the same O(n³) time structure.",
+      },
+    ];
+
+    /* ── Feasibility lookup ─────────────────────────────────────────────────── */
+    const FEASIBILITY = [
+      { max: 1e6,      label: "< 1 ms",         color: "#059669", bg: "#ECFDF5" },
+      { max: 1e8,      label: "< 1 second",      color: "#16A34A", bg: "#F0FDF4" },
+      { max: 1e10,     label: "Seconds–mins",    color: "#D97706", bg: "#FFFBEB" },
+      { max: 1e12,     label: "Minutes–hours",   color: "#EA580C", bg: "#FFF7ED" },
+      { max: 1e15,     label: "Days–years",      color: "#DC2626", bg: "#FEF2F2" },
+      { max: Infinity, label: "Intractable",     color: "#7F1D1D", bg: "#FEF2F2" },
+    ];
+
+    function getFeasibility(ops) {
+      if (!isFinite(ops) || ops > 1e300) return FEASIBILITY[5];
+      for (const f of FEASIBILITY) if (ops <= f.max) return f;
+      return FEASIBILITY[5];
+    }
+
+    function formatOps(ops) {
+      if (!isFinite(ops) || ops > 1e300) return "∞";
+      if (ops < 10000) return Math.round(ops).toLocaleString();
+      const e = Math.floor(Math.log10(ops));
+      const m = ops / Math.pow(10, e);
+      const sup = ['⁰','¹','²','³','⁴','⁵','⁶','⁷','⁸','⁹'];
+      const expStr = String(e).split('').map(d => sup[+d]).join('');
+      return `${m.toFixed(1)} × 10${expStr}`;
+    }
+
+    /* ── Bioinformatics-relevant n presets ──────────────────────────────────── */
+    const N_PRESETS = [
+      { label: "k-mer (k = 7)",          n: 7 },
+      { label: "Short read (150 bp)",    n: 150 },
+      { label: "Gene (1,000 bp)",        n: 1_000 },
+      { label: "Large gene (10 kbp)",    n: 10_000 },
+      { label: "Viral genome (30 kbp)",  n: 30_000 },
+      { label: "Bacterial genome (4 Mbp)", n: 4_000_000 },
+      { label: "Human genome (3 Gbp)",   n: 3_000_000_000 },
+    ];
+
+    /* ── SVG Growth Chart ───────────────────────────────────────────────────── */
+    function GrowthChart({ maxN, visible, logScale }) {
+      const W = 540, H = 290;
+      const P = { t: 18, r: 18, b: 44, l: 58 };
+      const PW = W - P.l - P.r, PH = H - P.t - P.b;
+
+      const visibleCls = CLASSES.filter(c => visible[c.id]);
+
+      const allPoints = useMemo(() => {
+        const out = {};
+        visibleCls.forEach(c => {
+          out[c.id] = [];
+          for (let n = 1; n <= maxN; n++) {
+            const raw = c.fn(n);
+            const v = logScale ? Math.log10(Math.max(raw, 0.1)) : raw;
+            if (isFinite(v)) out[c.id].push({ n, v });
+          }
+        });
+        return out;
+      }, [maxN, visible, logScale]);
+
+      const { minV, maxV } = useMemo(() => {
+        let lo = Infinity, hi = -Infinity;
+        Object.values(allPoints).forEach(pts =>
+          pts.forEach(p => { if (p.v < lo) lo = p.v; if (p.v > hi) hi = p.v; })
+        );
+        if (!isFinite(lo)) return { minV: 0, maxV: 1 };
+        if (hi === lo) hi = lo + 1;
+        return { minV: lo, maxV: hi };
+      }, [allPoints]);
+
+      const sx = n => P.l + ((n - 1) / Math.max(maxN - 1, 1)) * PW;
+      const sy = v => P.t + PH - Math.min(Math.max((v - minV) / (maxV - minV), 0), 1) * PH;
+      const toPath = pts =>
+        pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${sx(p.n).toFixed(1)},${sy(p.v).toFixed(1)}`).join(' ');
+
+      const xCount = Math.min(maxN, 9);
+      const xTicks = Array.from({ length: xCount }, (_, i) =>
+        Math.round(1 + (i * (maxN - 1)) / Math.max(xCount - 1, 1))
+      );
+      const yGridLines = [0, 0.25, 0.5, 0.75, 1];
+
+      return (
+        <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block', overflow: 'visible' }}>
+          {/* horizontal grid */}
+          {yGridLines.map(t => (
+            <line key={t}
+              x1={P.l} x2={P.l + PW}
+              y1={P.t + PH - t * PH} y2={P.t + PH - t * PH}
+              stroke={t === 0 ? '#94A3B8' : '#E2E8F0'} strokeWidth={t === 0 ? 1.5 : 0.75} />
+          ))}
+          {/* left axis */}
+          <line x1={P.l} x2={P.l} y1={P.t} y2={P.t + PH} stroke="#94A3B8" strokeWidth={1.5} />
+          {/* curves */}
+          {visibleCls.filter(c => (allPoints[c.id] || []).length > 1).map(c => (
+            <path key={c.id} d={toPath(allPoints[c.id])}
+              fill="none" stroke={c.color} strokeWidth={2.5}
+              strokeLinecap="round" strokeLinejoin="round" />
+          ))}
+          {/* x ticks + labels */}
+          {xTicks.map(n => (
+            <g key={n}>
+              <line x1={sx(n)} x2={sx(n)} y1={P.t + PH} y2={P.t + PH + 4} stroke="#94A3B8" />
+              <text x={sx(n)} y={P.t + PH + 16} textAnchor="middle" fontSize={10} fill="#64748B">{n}</text>
+            </g>
+          ))}
+          {/* axis labels */}
+          <text x={P.l + PW / 2} y={H - 4} textAnchor="middle" fontSize={11} fill="#64748B">Input size n</text>
+          <text x={13} y={P.t + PH / 2} textAnchor="middle" fontSize={11} fill="#64748B"
+            transform={`rotate(-90,13,${P.t + PH / 2})`}>
+            {logScale ? 'log₁₀(operations)' : 'Operations (normalized)'}
+          </text>
+        </svg>
+      );
+    }
+
+    /* ── Operations table ───────────────────────────────────────────────────── */
+    function OperationsTable({ n }) {
+      return (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: '2px solid #E2E8F0' }}>
+              {['Complexity', 'Operations at n = ' + n.toLocaleString(), 'Wall-clock estimate'].map(h => (
+                <th key={h} style={{ padding: '7px 10px', textAlign: h === 'Operations at n = ' + n.toLocaleString() ? 'right' : 'left', fontSize: 11, fontWeight: 700, color: '#64748B' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {CLASSES.map(c => {
+              const ops = c.fn(n);
+              const f = getFeasibility(ops);
+              return (
+                <tr key={c.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                  <td style={{ padding: '7px 10px' }}>
+                    <span style={{ fontFamily: 'monospace', fontWeight: 700, color: c.color, fontSize: 14 }}>{c.label}</span>
+                    <span style={{ color: '#94A3B8', fontSize: 11, marginLeft: 7 }}>{c.desc}</span>
+                  </td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 600, color: '#1E293B' }}>
+                    {formatOps(ops)}
+                  </td>
+                  <td style={{ padding: '7px 10px' }}>
+                    <span style={{ background: f.bg, color: f.color, padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700 }}>
+                      {f.label}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      );
+    }
+
+    /* ── Growth Curves Panel ────────────────────────────────────────────────── */
+    function GrowthPanel() {
+      const [maxN, setMaxN] = useState(20);
+      const [logScale, setLogScale] = useState(false);
+      const [visible, setVisible] = useState(
+        { O1: true, Ologn: true, On: true, Onlogn: true, On2: true, On3: false, O2n: true }
+      );
+      const [nPreset, setNPreset] = useState(2);
+      const [customN, setCustomN] = useState('1000');
+      const isCustom = nPreset === N_PRESETS.length;
+      const n = isCustom ? (Math.max(1, parseInt(customN) || 1)) : N_PRESETS[nPreset].n;
+
+      const toggle = id => setVisible(v => ({ ...v, [id]: !v[id] }));
+
+      const expDominates = visible.O2n && !logScale;
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+          {/* Complexity order banner */}
+          <div style={{ background: 'white', borderRadius: 12, padding: '14px 20px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+            <p style={{ fontSize: 11, fontWeight: 700, color: '#64748B', margin: '0 0 8px' }}>
+              COMPLEXITY ORDER — FASTEST TO SLOWEST
+            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}>
+              {CLASSES.map((c, i) => (
+                <React.Fragment key={c.id}>
+                  <span style={{
+                    background: c.color + '1a', color: c.color, fontWeight: 700,
+                    padding: '3px 10px', borderRadius: 20, fontFamily: 'monospace', fontSize: 13,
+                  }}>{c.label}</span>
+                  {i < CLASSES.length - 1 &&
+                    <span style={{ color: '#CBD5E1', fontWeight: 700, fontSize: 13 }}>&lt;</span>}
+                </React.Fragment>
+              ))}
+            </div>
+            <p style={{ fontSize: 12, color: '#64748B', margin: '8px 0 0', lineHeight: 1.6 }}>
+              Big O notation describes the <em>worst-case growth rate</em> of running time as input
+              size n grows. Constants and lower-order terms are dropped — O(3n² + 5n + 2) simplifies
+              to O(n²).
+            </p>
+          </div>
+
+          {/* Chart card */}
+          <div style={{ background: 'white', borderRadius: 12, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center', marginBottom: 12 }}>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: '#64748B', display: 'block', marginBottom: 4 }}>
+                  MAX n (CHART X-AXIS)
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input type="range" min={5} max={50} value={maxN}
+                    onChange={e => setMaxN(+e.target.value)}
+                    style={{ width: 120, accentColor: '#2a7f8a' }} />
+                  <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#2a7f8a', minWidth: 24 }}>{maxN}</span>
+                </div>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: '#64748B', display: 'block', marginBottom: 4 }}>
+                  Y-AXIS SCALE
+                </label>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {[['Linear', false], ['Logarithmic', true]].map(([lbl, val]) => (
+                    <button key={lbl} onClick={() => setLogScale(val)} style={{
+                      padding: '5px 10px', fontSize: 11, borderRadius: 6, cursor: 'pointer',
+                      border: logScale === val ? '2px solid #2a7f8a' : '1px solid #E2E8F0',
+                      background: logScale === val ? '#e8f4f6' : 'white',
+                      color: logScale === val ? '#2a7f8a' : '#64748B', fontWeight: 600,
+                    }}>{lbl}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Curve toggles (also serve as legend) */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+              {CLASSES.map(c => (
+                <button key={c.id} onClick={() => toggle(c.id)} style={{
+                  padding: '4px 11px', fontSize: 12, borderRadius: 20, cursor: 'pointer',
+                  border: `2px solid ${visible[c.id] ? c.color : '#E2E8F0'}`,
+                  background: visible[c.id] ? c.color + '18' : 'white',
+                  color: visible[c.id] ? c.color : '#94A3B8',
+                  fontFamily: 'monospace', fontWeight: 700,
+                  textDecoration: visible[c.id] ? 'none' : 'line-through',
+                }}>{c.label}</button>
+              ))}
+            </div>
+
+            <GrowthChart maxN={maxN} visible={visible} logScale={logScale} />
+
+            {expDominates && (
+              <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 8, padding: '8px 12px', marginTop: 10, fontSize: 12, color: '#92400E', lineHeight: 1.6 }}>
+                <strong>Tip:</strong> O(2ⁿ) grows so fast it compresses all polynomial curves to a flat line.
+                Switch to <strong>Logarithmic</strong> scale to compare their shapes — or reduce max n to ≤15.
+              </div>
+            )}
+          </div>
+
+          {/* Operations calculator */}
+          <div style={{ background: 'white', borderRadius: 12, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+            <h3 style={{ fontSize: 15, fontWeight: 700, color: '#1E293B', margin: '0 0 4px' }}>
+              Operations Calculator
+            </h3>
+            <p style={{ fontSize: 12, color: '#64748B', margin: '0 0 12px', lineHeight: 1.6 }}>
+              How many operations does each complexity class require for a given input size?
+              Assuming 10⁹ ops/sec — a rough approximation of a modern CPU single core.
+            </p>
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+              {N_PRESETS.map((p, i) => (
+                <button key={i} onClick={() => setNPreset(i)} style={{
+                  padding: '5px 10px', fontSize: 11, borderRadius: 6, cursor: 'pointer',
+                  border: nPreset === i ? '2px solid #2a7f8a' : '1px solid #E2E8F0',
+                  background: nPreset === i ? '#e8f4f6' : 'white',
+                  color: nPreset === i ? '#2a7f8a' : '#64748B', fontWeight: 600,
+                }}>{p.label}</button>
+              ))}
+              <button onClick={() => setNPreset(N_PRESETS.length)} style={{
+                padding: '5px 10px', fontSize: 11, borderRadius: 6, cursor: 'pointer',
+                border: isCustom ? '2px solid #2a7f8a' : '1px solid #E2E8F0',
+                background: isCustom ? '#e8f4f6' : 'white',
+                color: isCustom ? '#2a7f8a' : '#64748B', fontWeight: 600,
+              }}>Custom</button>
+            </div>
+
+            {isCustom && (
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: '#64748B', display: 'block', marginBottom: 4 }}>ENTER n</label>
+                <input type="number" min={1} value={customN} onChange={e => setCustomN(e.target.value)}
+                  style={{ padding: '7px 10px', border: '2px solid #E2E8F0', borderRadius: 8, fontSize: 14, fontFamily: 'monospace', width: 180, fontWeight: 600, color: '#1E293B', outline: 'none' }} />
+              </div>
+            )}
+
+            <div style={{ border: '1px solid #E2E8F0', borderRadius: 8, overflow: 'hidden' }}>
+              <div style={{ padding: '7px 14px', background: '#F1F5F9', fontSize: 12, fontWeight: 700, color: '#475569' }}>
+                n = {n.toLocaleString()}
+              </div>
+              <OperationsTable n={n} />
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ── Expandable algorithm card ───────────────────────────────────────────── */
+    function AlgoCard({ algo, clsColor }) {
+      const [open, setOpen] = useState(false);
+      return (
+        <div style={{
+          border: `1px solid ${open ? clsColor : '#E2E8F0'}`,
+          borderRadius: 10, overflow: 'hidden', transition: 'border-color 0.2s',
+        }}>
+          <button onClick={() => setOpen(!open)} style={{
+            width: '100%', padding: '11px 14px', display: 'flex', alignItems: 'flex-start', gap: 10,
+            background: open ? clsColor + '10' : 'white', border: 'none', cursor: 'pointer', textAlign: 'left',
+          }}>
+            <span style={{ fontSize: 19, lineHeight: 1.4, flexShrink: 0 }}>{algo.icon}</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontFamily: 'Nunito, sans-serif', fontWeight: 700, fontSize: 14, color: '#1E293B', marginBottom: 2 }}>
+                {algo.name}
+              </div>
+              <div style={{ fontSize: 12, color: '#64748B', lineHeight: 1.5 }}>{algo.short}</div>
+            </div>
+            <span style={{ color: '#94A3B8', fontSize: 11, marginTop: 3, flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
+          </button>
+          {open && (
+            <div style={{
+              padding: '0 14px 14px 44px', fontSize: 13, color: '#475569',
+              lineHeight: 1.7, borderTop: `1px solid ${clsColor}30`,
+            }}>
+              {algo.detail}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    /* ── Algorithms Panel ───────────────────────────────────────────────────── */
+    function AlgosPanel() {
+      const [filter, setFilter] = useState('all');
+
+      const grouped = useMemo(() => {
+        const out = {};
+        CLASSES.forEach(c => { out[c.label] = []; });
+        ALGOS.forEach(a => { if (out[a.cls]) out[a.cls].push(a); });
+        return out;
+      }, []);
+
+      const shownCls = filter === 'all' ? CLASSES : CLASSES.filter(c => c.label === filter);
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+          {/* Filter row */}
+          <div style={{ background: 'white', borderRadius: 12, padding: '14px 20px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+            <p style={{ fontSize: 11, fontWeight: 700, color: '#64748B', margin: '0 0 8px' }}>
+              FILTER BY COMPLEXITY CLASS
+            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              <button onClick={() => setFilter('all')} style={{
+                padding: '5px 12px', fontSize: 12, borderRadius: 20, cursor: 'pointer',
+                border: filter === 'all' ? '2px solid #2a7f8a' : '1px solid #E2E8F0',
+                background: filter === 'all' ? '#e8f4f6' : 'white',
+                color: filter === 'all' ? '#2a7f8a' : '#64748B', fontWeight: 700,
+              }}>All</button>
+              {CLASSES.map(c => (
+                <button key={c.id} onClick={() => setFilter(filter === c.label ? 'all' : c.label)} style={{
+                  padding: '5px 12px', fontSize: 12, borderRadius: 20, cursor: 'pointer',
+                  border: `2px solid ${filter === c.label ? c.color : '#E2E8F0'}`,
+                  background: filter === c.label ? c.color + '18' : 'white',
+                  color: filter === c.label ? c.color : '#64748B',
+                  fontFamily: 'monospace', fontWeight: 700,
+                }}>{c.label}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* Algorithm groups */}
+          {shownCls.map(cls => {
+            const algos = grouped[cls.label] || [];
+            if (!algos.length) return null;
+            return (
+              <div key={cls.id}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                  <span style={{
+                    background: cls.color + '1a', color: cls.color,
+                    fontWeight: 700, padding: '4px 14px', borderRadius: 20,
+                    fontFamily: 'monospace', fontSize: 14,
+                  }}>{cls.label}</span>
+                  <span style={{ fontSize: 13, color: '#64748B', fontWeight: 600 }}>{cls.desc}</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  {algos.map((a, i) => <AlgoCard key={i} algo={a} clsColor={cls.color} />)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    /* ── Quiz Panel ─────────────────────────────────────────────────────────── */
+    function QuizPanel() {
+      const [qIdx, setQIdx]     = useState(0);
+      const [chosen, setChosen] = useState(null);
+      const [score, setScore]   = useState(0);
+      const [answers, setAnswers] = useState([]);
+      const [done, setDone]     = useState(false);
+
+      const q = QUIZ[qIdx];
+      const answered = chosen !== null;
+      const isCorrect = chosen === q.answer;
+
+      const handleChoose = idx => {
+        if (answered) return;
+        setChosen(idx);
+        if (idx === q.answer) setScore(s => s + 1);
+        setAnswers(prev => [...prev, { chosen: idx, correct: idx === q.answer }]);
+      };
+
+      const handleNext = () => {
+        if (qIdx + 1 >= QUIZ.length) { setDone(true); }
+        else { setQIdx(i => i + 1); setChosen(null); }
+      };
+
+      const handleReset = () => {
+        setQIdx(0); setChosen(null); setScore(0); setAnswers([]); setDone(false);
+      };
+
+      if (done) {
+        const pct = Math.round((score / QUIZ.length) * 100);
+        const emoji = pct === 100 ? '🎉' : pct >= 75 ? '🌟' : pct >= 50 ? '📚' : '🔄';
+        const msg = pct === 100
+          ? 'Perfect score! You have mastered Big-O complexity for bioinformatics.'
+          : pct >= 75
+          ? 'Great work! Review the algorithm browser to solidify the remaining gaps.'
+          : pct >= 50
+          ? 'Good start! Use the Growth Curves and Algorithm Browser to build intuition.'
+          : 'Keep practising — Big-O becomes clear with repeated exposure to concrete examples.';
+
+        return (
+          <div style={{ background: 'white', borderRadius: 12, padding: 32, boxShadow: '0 1px 3px rgba(0,0,0,0.08)', textAlign: 'center' }}>
+            <div style={{ fontSize: 52, marginBottom: 12 }}>{emoji}</div>
+            <h2 style={{ fontSize: 22, fontWeight: 800, color: '#1E293B', margin: '0 0 8px' }}>
+              {score} / {QUIZ.length} correct ({pct}%)
+            </h2>
+            <p style={{ color: '#64748B', fontSize: 14, marginBottom: 24, lineHeight: 1.6 }}>{msg}</p>
+
+            {/* Answer review */}
+            <div style={{ textAlign: 'left', marginBottom: 24 }}>
+              {QUIZ.map((q, i) => (
+                <div key={i} style={{ display: 'flex', gap: 10, padding: '8px 0', borderBottom: '1px solid #F1F5F9', fontSize: 13 }}>
+                  <span style={{ fontSize: 16, flexShrink: 0 }}>{answers[i]?.correct ? '✅' : '❌'}</span>
+                  <div>
+                    <div style={{ fontWeight: 600, color: '#1E293B', marginBottom: 2 }}>
+                      Q{i + 1}: {q.choices[q.answer]}
+                    </div>
+                    {!answers[i]?.correct && (
+                      <div style={{ fontSize: 12, color: '#EF4444' }}>
+                        Your answer: {q.choices[answers[i]?.chosen ?? -1] ?? '—'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button onClick={handleReset} style={{
+              padding: '10px 28px', fontSize: 14, fontWeight: 700, borderRadius: 8,
+              border: 'none', background: '#2a7f8a', color: 'white', cursor: 'pointer',
+            }}>Try Again</button>
+          </div>
+        );
+      }
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+          {/* Progress bar */}
+          <div style={{
+            background: 'white', borderRadius: 12, padding: '12px 20px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.08)', display: 'flex', alignItems: 'center', gap: 14,
+          }}>
+            <div style={{ flex: 1, background: '#F1F5F9', borderRadius: 99, height: 8, overflow: 'hidden' }}>
+              <div style={{
+                width: `${(qIdx / QUIZ.length) * 100}%`, height: '100%',
+                background: '#2a7f8a', borderRadius: 99, transition: 'width 0.3s',
+              }} />
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#64748B', whiteSpace: 'nowrap' }}>
+              {qIdx + 1} / {QUIZ.length} — Score: {score}
+            </span>
+          </div>
+
+          {/* Question card */}
+          <div style={{ background: 'white', borderRadius: 12, padding: 24, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+            <p style={{ fontSize: 11, fontWeight: 700, color: '#64748B', margin: '0 0 10px' }}>
+              QUESTION {qIdx + 1} OF {QUIZ.length}
+            </p>
+            <p style={{ fontSize: 15, fontWeight: 600, color: '#1E293B', lineHeight: 1.65, margin: '0 0 20px' }}>
+              {q.q}
+            </p>
+
+            {/* Choices */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+              {q.choices.map((choice, idx) => {
+                let bg = 'white', border = '#E2E8F0', clr = '#1E293B';
+                if (answered) {
+                  if (idx === q.answer) { bg = '#ECFDF5'; border = '#10B981'; clr = '#065F46'; }
+                  else if (idx === chosen) { bg = '#FEF2F2'; border = '#EF4444'; clr = '#7F1D1D'; }
+                  else { clr = '#94A3B8'; }
+                }
+                const letter = String.fromCharCode(65 + idx);
+                const icon = answered
+                  ? (idx === q.answer ? '✓' : idx === chosen ? '✗' : letter)
+                  : letter;
+                return (
+                  <button key={idx} onClick={() => handleChoose(idx)} disabled={answered} style={{
+                    padding: '11px 16px', fontSize: 14, borderRadius: 8,
+                    cursor: answered ? 'default' : 'pointer',
+                    border: `2px solid ${border}`, background: bg, color: clr,
+                    fontWeight: 600, textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10,
+                    fontFamily: "'Nunito Sans', sans-serif", transition: 'all 0.15s',
+                  }}>
+                    <span style={{ fontFamily: 'monospace', fontSize: 14, minWidth: 16, textAlign: 'center' }}>{icon}</span>
+                    <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{choice}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Explanation */}
+            {answered && (
+              <div style={{
+                background: isCorrect ? '#ECFDF5' : '#FEF2F2',
+                border: `1px solid ${isCorrect ? '#A7F3D0' : '#FECACA'}`,
+                borderRadius: 8, padding: '12px 16px', marginBottom: 16,
+                fontSize: 13, lineHeight: 1.65,
+              }}>
+                <span style={{ fontWeight: 700, color: isCorrect ? '#065F46' : '#7F1D1D' }}>
+                  {isCorrect ? '✓ Correct! ' : '✗ Not quite. '}
+                </span>
+                <span style={{ color: '#475569' }}>{q.explanation}</span>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <button onClick={handleReset} style={{
+                padding: '8px 16px', fontSize: 12, fontWeight: 700, borderRadius: 8,
+                border: '2px solid #FCA5A5', background: 'white', color: '#DC2626', cursor: 'pointer',
+              }}>↺ Restart</button>
+              {answered && (
+                <button onClick={handleNext} style={{
+                  padding: '10px 24px', fontSize: 14, fontWeight: 700, borderRadius: 8,
+                  border: 'none', background: '#2a7f8a', color: 'white', cursor: 'pointer',
+                }}>
+                  {qIdx + 1 >= QUIZ.length ? 'See Results' : 'Next Question →'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ── App ────────────────────────────────────────────────────────────────── */
+    const App = function BigOComplexity() {
+      const [tab, setTab] = useState('chart');
+      const TABS = [
+        { id: 'chart', label: '📈 Growth Curves' },
+        { id: 'algos', label: '🧬 Algorithm Browser' },
+        { id: 'quiz',  label: '🎯 Knowledge Check' },
+      ];
+
+      return (
+        <div style={{
+          fontFamily: "'Nunito Sans', -apple-system, sans-serif",
+          maxWidth: 880, margin: '0 auto', padding: '20px 16px 48px',
+          background: '#f8f9fa', minHeight: '100vh',
+        }}>
+          {/* Header */}
+          <div style={{ textAlign: 'center', marginBottom: 20 }}>
+            <h1 style={{ fontSize: 24, fontWeight: 800, color: '#0F172A', margin: 0 }}>
+              ⏱ Big-O &amp; Algorithm Complexity
+            </h1>
+            <p style={{ fontSize: 13, color: '#64748B', margin: '6px 0 0' }}>
+              BSB511 / BENG451 — Complexity analysis for bioinformatics algorithms
+            </p>
+          </div>
+
+          {/* Tab bar */}
+          <div style={{
+            display: 'flex', gap: 6, marginBottom: 20,
+            background: 'white', borderRadius: 10, padding: 6,
+            boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+          }}>
+            {TABS.map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)} style={{
+                flex: 1, padding: '9px 8px', fontSize: 12, fontWeight: 700,
+                borderRadius: 7, cursor: 'pointer', border: 'none',
+                background: tab === t.id ? '#2a7f8a' : 'transparent',
+                color: tab === t.id ? 'white' : '#64748B',
+                transition: 'all 0.15s',
+              }}>{t.label}</button>
+            ))}
+          </div>
+
+          {/* Active panel */}
+          {tab === 'chart' && <GrowthPanel />}
+          {tab === 'algos' && <AlgosPanel />}
+          {tab === 'quiz'  && <QuizPanel />}
+
+          <div style={{ textAlign: 'center', marginTop: 24, fontSize: 11, color: '#94A3B8' }}>
+            BSB511 / BENG451 — Bioinformatics Fundamentals — Algorithm Complexity
+          </div>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
