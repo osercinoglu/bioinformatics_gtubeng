@@ -53,6 +53,7 @@ All widgets in `docs/` share the same pattern:
 | `alignment-sandbox.html` | Interactive Needleman-Wunsch & Smith-Waterman DP matrix (hand-fill + check) |
 | `motif-finder.html` | PROSITE pattern scanning on protein & DNA sequences |
 | `phylo-interpreter.html` | UPGMA & Neighbor-Joining step-by-step tree building, Newick export |
+| `scoring-matrices.html` | Dayhoff PAM construction, PAM1→PAM250 by matrix exponentiation, interactive globin sequence database builder, PAM1/30/250 explorer |
 | `big-o-complexity.html` | Big-O growth curves, bioinformatics algorithm browser by complexity class, 8-question quiz |
 | `hmm-hmmer.html` | Profile HMM architecture (match/insert/delete states), MSA→profile builder, Viterbi log-odds scoring, 8-question quiz |
 
