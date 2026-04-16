@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Scoring Matrices — Bioinformatics Widget</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Nunito+Sans:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Nunito Sans', sans-serif; background: #f8f9fa; color: #000; }
+    #back { position: fixed; top: 14px; left: 16px; font-size: 0.8rem; color: #2a7f8a; text-decoration: none; z-index: 100; }
+    #back:hover { text-decoration: underline; }
+    #root { max-width: 1040px; margin: 0 auto; padding: 20px 16px 60px; }
+  </style>
+</head>
+<body>
+<a id="back" href="index.html">← All Widgets</a>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useMemo } = React;
+
+// ── Amino acids ──────────────────────────────────────────────────────────────
+const AAS = ['A','R','N','D','C','Q','E','G','H','I','L','K','M','F','P','S','T','W','Y','V'];
+const AA_NAMES = {
+  A:'Alanine', R:'Arginine', N:'Asparagine', D:'Aspartate', C:'Cysteine',
+  Q:'Glutamine', E:'Glutamate', G:'Glycine', H:'Histidine', I:'Isoleucine',
+  L:'Leucine', K:'Lysine', M:'Methionine', F:'Phenylalanine', P:'Proline',
+  S:'Serine', T:'Threonine', W:'Tryptophan', Y:'Tyrosine', V:'Valine'
+};
+
+// ── PAM matrices (Dayhoff 1978) ───────────────────────────────────────────────
+const PAM1 = {
+  A:{A:2,R:-2,N:0,D:0,C:-3,Q:0,E:0,G:1,H:-2,I:-1,L:-2,K:-1,M:-1,F:-3,P:1,S:1,T:1,W:-7,Y:-3,V:0},
+  R:{A:-2,R:9,N:0,D:-1,C:-4,Q:1,E:-1,G:-3,H:2,I:-2,L:-3,K:3,M:0,F:-4,P:0,S:-1,T:-1,W:1,Y:-3,V:-2},
+  N:{A:0,R:0,N:4,D:2,C:-5,Q:1,E:1,G:0,H:2,I:-2,L:-3,K:1,M:-2,F:-4,P:-1,S:1,T:0,W:-4,Y:-2,V:-2},
+  D:{A:0,R:-1,N:2,D:5,C:-6,Q:1,E:3,G:1,H:0,I:-3,L:-4,K:0,M:-3,F:-7,P:-1,S:0,T:0,W:-8,Y:-5,V:-2},
+  C:{A:-3,R:-4,N:-5,D:-6,C:13,Q:-6,E:-6,G:-4,H:-4,I:-2,L:-7,K:-6,M:-6,F:-5,P:-4,S:-1,T:-3,W:-9,Y:-1,V:-2},
+  Q:{A:0,R:1,N:1,D:1,C:-6,Q:6,E:2,G:-1,H:3,I:-2,L:-2,K:1,M:0,F:-5,P:0,S:0,T:-1,W:-5,Y:-4,V:-2},
+  E:{A:0,R:-1,N:1,D:3,C:-6,Q:2,E:6,G:0,H:0,I:-2,L:-3,K:0,M:-2,F:-5,P:-1,S:0,T:0,W:-7,Y:-4,V:-2},
+  G:{A:1,R:-3,N:0,D:1,C:-4,Q:-1,E:0,G:6,H:-3,I:-4,L:-4,K:-2,M:-3,F:-5,P:-1,S:1,T:0,W:-8,Y:-6,V:-1},
+  H:{A:-2,R:2,N:2,D:0,C:-4,Q:3,E:0,G:-3,H:8,I:-3,L:-2,K:0,M:-2,F:-2,P:0,S:-1,T:-2,W:-2,Y:1,V:-3},
+  I:{A:-1,R:-2,N:-2,D:-3,C:-2,Q:-2,E:-2,G:-4,H:-3,I:6,L:3,K:-2,M:2,F:1,P:-3,S:-1,T:0,W:-6,Y:-1,V:4},
+  L:{A:-2,R:-3,N:-3,D:-4,C:-7,Q:-2,E:-3,G:-4,H:-2,I:3,L:7,K:-3,M:4,F:3,P:-3,S:-3,T:-2,W:-2,Y:0,V:2},
+  K:{A:-1,R:3,N:1,D:0,C:-6,Q:1,E:0,G:-2,H:0,I:-2,L:-3,K:6,M:0,F:-5,P:-1,S:0,T:0,W:-3,Y:-4,V:-2},
+  M:{A:-1,R:0,N:-2,D:-3,C:-6,Q:0,E:-2,G:-3,H:-2,I:2,L:4,K:0,M:8,F:0,P:-3,S:-2,T:-1,W:-5,Y:-2,V:2},
+  F:{A:-3,R:-4,N:-4,D:-7,C:-5,Q:-5,E:-5,G:-5,H:-2,I:1,L:3,K:-5,M:0,F:10,P:-5,S:-3,T:-3,W:1,Y:7,V:0},
+  P:{A:1,R:0,N:-1,D:-1,C:-4,Q:0,E:-1,G:-1,H:0,I:-3,L:-3,K:-1,M:-3,F:-5,P:8,S:1,T:0,W:-7,Y:-6,V:-1},
+  S:{A:1,R:-1,N:1,D:0,C:-1,Q:0,E:0,G:1,H:-1,I:-1,L:-3,K:0,M:-2,F:-3,P:1,S:3,T:2,W:-2,Y:-3,V:-1},
+  T:{A:1,R:-1,N:0,D:0,C:-3,Q:-1,E:0,G:0,H:-2,I:0,L:-2,K:0,M:-1,F:-3,P:0,S:2,T:4,W:-6,Y:-3,V:0},
+  W:{A:-7,R:1,N:-4,D:-8,C:-9,Q:-5,E:-7,G:-8,H:-2,I:-6,L:-2,K:-3,M:-5,F:1,P:-7,S:-2,T:-6,W:19,Y:0,V:-7},
+  Y:{A:-3,R:-3,N:-2,D:-5,C:-1,Q:-4,E:-4,G:-6,H:1,I:-1,L:0,K:-4,M:-2,F:7,P:-6,S:-3,T:-3,W:0,Y:11,V:-2},
+  V:{A:0,R:-2,N:-2,D:-2,C:-2,Q:-2,E:-2,G:-1,H:-3,I:4,L:2,K:-2,M:2,F:0,P:-1,S:-1,T:0,W:-7,Y:-2,V:5}
+};
+const PAM30 = {
+  A:{A:6,R:-7,N:-4,D:-3,C:-6,Q:-4,E:-2,G:0,H:-7,I:-5,L:-6,K:-7,M:-5,F:-8,P:-2,S:0,T:-1,W:-13,Y:-8,V:-2},
+  R:{A:-7,R:8,N:-6,D:-10,C:-8,Q:-2,E:-9,G:-9,H:-2,I:-5,L:-8,K:0,M:-4,F:-9,P:-4,S:-3,T:-6,W:-2,Y:-10,V:-8},
+  N:{A:-4,R:-6,N:8,D:2,C:-11,Q:-3,E:-2,G:-3,H:0,I:-5,L:-7,K:0,M:-9,F:-9,P:-6,S:0,T:-2,W:-8,Y:-4,V:-8},
+  D:{A:-3,R:-10,N:2,D:8,C:-14,Q:-2,E:2,G:-3,H:-4,I:-7,L:-12,K:-4,M:-11,F:-15,P:-8,S:-4,T:-5,W:-15,Y:-11,V:-8},
+  C:{A:-6,R:-8,N:-11,D:-14,C:10,Q:-14,E:-14,G:-9,H:-7,I:-6,L:-15,K:-14,M:-13,F:-13,P:-8,S:-3,T:-8,W:-15,Y:-4,V:-6},
+  Q:{A:-4,R:-2,N:-3,D:-2,C:-14,Q:8,E:1,G:-7,H:1,I:-8,L:-5,K:-3,M:-4,F:-13,P:-3,S:-5,T:-5,W:-13,Y:-12,V:-7},
+  E:{A:-2,R:-9,N:-2,D:2,C:-14,Q:1,E:8,G:-4,H:-5,I:-5,L:-9,K:-4,M:-7,F:-14,P:-5,S:-4,T:-6,W:-17,Y:-8,V:-6},
+  G:{A:0,R:-9,N:-3,D:-3,C:-9,Q:-7,E:-4,G:6,H:-9,I:-11,L:-10,K:-7,M:-8,F:-9,P:-6,S:-2,T:-6,W:-15,Y:-14,V:-5},
+  H:{A:-7,R:-2,N:0,D:-4,C:-7,Q:1,E:-5,G:-9,H:9,I:-9,L:-6,K:-6,M:-10,F:-6,P:-4,S:-6,T:-7,W:-7,Y:0,V:-6},
+  I:{A:-5,R:-5,N:-5,D:-7,C:-6,Q:-8,E:-5,G:-11,H:-9,I:8,L:1,K:-6,M:0,F:0,P:-8,S:-7,T:-2,W:-14,Y:-6,V:4},
+  L:{A:-6,R:-8,N:-7,D:-12,C:-15,Q:-5,E:-9,G:-10,H:-6,I:1,L:7,K:-8,M:1,F:0,P:-7,S:-8,T:-7,W:-6,Y:-7,V:-3},
+  K:{A:-7,R:0,N:0,D:-4,C:-14,Q:-3,E:-4,G:-7,H:-6,I:-6,L:-8,K:7,M:-2,F:-14,P:-6,S:-4,T:-3,W:-12,Y:-9,V:-9},
+  M:{A:-5,R:-4,N:-9,D:-11,C:-13,Q:-4,E:-7,G:-8,H:-10,I:0,L:1,K:-2,M:11,F:-4,P:-8,S:-5,T:-4,W:-13,Y:-11,V:0},
+  F:{A:-8,R:-9,N:-9,D:-15,C:-13,Q:-13,E:-14,G:-9,H:-6,I:0,L:0,K:-14,M:-4,F:9,P:-10,S:-6,T:-9,W:-4,Y:3,V:-8},
+  P:{A:-2,R:-4,N:-6,D:-8,C:-8,Q:-3,E:-5,G:-6,H:-4,I:-8,L:-7,K:-6,M:-8,F:-10,P:8,S:-2,T:-4,W:-14,Y:-13,V:-6},
+  S:{A:0,R:-3,N:0,D:-4,C:-3,Q:-5,E:-4,G:-2,H:-6,I:-7,L:-8,K:-4,M:-5,F:-6,P:-2,S:6,T:0,W:-5,Y:-7,V:-6},
+  T:{A:-1,R:-6,N:-2,D:-5,C:-8,Q:-5,E:-6,G:-6,H:-7,I:-2,L:-7,K:-3,M:-4,F:-9,P:-4,S:0,T:7,W:-13,Y:-6,V:0},
+  W:{A:-13,R:-2,N:-8,D:-15,C:-15,Q:-13,E:-17,G:-15,H:-7,I:-14,L:-6,K:-12,M:-13,F:-4,P:-14,S:-5,T:-13,W:13,Y:-5,V:-15},
+  Y:{A:-8,R:-10,N:-4,D:-11,C:-4,Q:-12,E:-8,G:-14,H:0,I:-6,L:-7,K:-9,M:-11,F:3,P:-13,S:-7,T:-6,W:-5,Y:9,V:-7},
+  V:{A:-2,R:-8,N:-8,D:-8,C:-6,Q:-7,E:-6,G:-5,H:-6,I:4,L:-3,K:-9,M:0,F:-8,P:-6,S:-6,T:0,W:-15,Y:-7,V:7}
+};
+const PAM250 = {
+  A:{A:2,R:-2,N:0,D:0,C:-2,Q:0,E:0,G:1,H:-1,I:-1,L:-2,K:-1,M:-1,F:-3,P:1,S:1,T:1,W:-6,Y:-3,V:0},
+  R:{A:-2,R:6,N:0,D:-1,C:-3,Q:1,E:-1,G:-3,H:2,I:-2,L:-3,K:3,M:0,F:-4,P:0,S:0,T:-1,W:2,Y:-4,V:-2},
+  N:{A:0,R:0,N:2,D:2,C:-4,Q:1,E:1,G:0,H:2,I:-2,L:-3,K:1,M:-2,F:-3,P:0,S:1,T:0,W:-4,Y:-2,V:-2},
+  D:{A:0,R:-1,N:2,D:4,C:-5,Q:2,E:3,G:1,H:1,I:-2,L:-4,K:0,M:-3,F:-6,P:-1,S:0,T:0,W:-7,Y:-4,V:-2},
+  C:{A:-2,R:-3,N:-4,D:-5,C:12,Q:-5,E:-5,G:-3,H:-3,I:-2,L:-6,K:-5,M:-5,F:-4,P:-3,S:0,T:-2,W:-8,Y:0,V:-2},
+  Q:{A:0,R:1,N:1,D:2,C:-5,Q:4,E:2,G:-1,H:3,I:-2,L:-2,K:1,M:-1,F:-5,P:0,S:-1,T:-1,W:-5,Y:-4,V:-2},
+  E:{A:0,R:-1,N:1,D:3,C:-5,Q:2,E:4,G:0,H:1,I:-2,L:-3,K:0,M:-2,F:-5,P:-1,S:0,T:0,W:-7,Y:-4,V:-2},
+  G:{A:1,R:-3,N:0,D:1,C:-3,Q:-1,E:0,G:5,H:-2,I:-3,L:-4,K:-2,M:-3,F:-5,P:0,S:1,T:0,W:-7,Y:-5,V:-1},
+  H:{A:-1,R:2,N:2,D:1,C:-3,Q:3,E:1,G:-2,H:6,I:-2,L:-2,K:0,M:-2,F:-2,P:0,S:-1,T:-1,W:-3,Y:0,V:-2},
+  I:{A:-1,R:-2,N:-2,D:-2,C:-2,Q:-2,E:-2,G:-3,H:-2,I:5,L:2,K:-2,M:2,F:1,P:-2,S:-1,T:0,W:-5,Y:-1,V:4},
+  L:{A:-2,R:-3,N:-3,D:-4,C:-6,Q:-2,E:-3,G:-4,H:-2,I:2,L:6,K:-3,M:4,F:2,P:-3,S:-3,T:-2,W:-2,Y:-1,V:2},
+  K:{A:-1,R:3,N:1,D:0,C:-5,Q:1,E:0,G:-2,H:0,I:-2,L:-3,K:5,M:0,F:-5,P:-1,S:0,T:0,W:-3,Y:-4,V:-2},
+  M:{A:-1,R:0,N:-2,D:-3,C:-5,Q:-1,E:-2,G:-3,H:-2,I:2,L:4,K:0,M:6,F:0,P:-2,S:-2,T:-1,W:-4,Y:-2,V:2},
+  F:{A:-3,R:-4,N:-3,D:-6,C:-4,Q:-5,E:-5,G:-5,H:-2,I:1,L:2,K:-5,M:0,F:9,P:-5,S:-3,T:-3,W:0,Y:7,V:-1},
+  P:{A:1,R:0,N:0,D:-1,C:-3,Q:0,E:-1,G:0,H:0,I:-2,L:-3,K:-1,M:-2,F:-5,P:6,S:1,T:0,W:-6,Y:-5,V:-1},
+  S:{A:1,R:0,N:1,D:0,C:0,Q:-1,E:0,G:1,H:-1,I:-1,L:-3,K:0,M:-2,F:-3,P:1,S:2,T:1,W:-2,Y:-3,V:-1},
+  T:{A:1,R:-1,N:0,D:0,C:-2,Q:-1,E:0,G:0,H:-1,I:0,L:-2,K:0,M:-1,F:-3,P:0,S:1,T:3,W:-5,Y:-3,V:0},
+  W:{A:-6,R:2,N:-4,D:-7,C:-8,Q:-5,E:-7,G:-7,H:-3,I:-5,L:-2,K:-3,M:-4,F:0,P:-6,S:-2,T:-5,W:17,Y:0,V:-6},
+  Y:{A:-3,R:-4,N:-2,D:-4,C:0,Q:-4,E:-4,G:-5,H:0,I:-1,L:-1,K:-4,M:-2,F:7,P:-5,S:-3,T:-3,W:0,Y:10,V:-2},
+  V:{A:0,R:-2,N:-2,D:-2,C:-2,Q:-2,E:-2,G:-1,H:-2,I:4,L:2,K:-2,M:2,F:-1,P:-1,S:-1,T:0,W:-6,Y:-2,V:4}
+};
+
+// ── Sequence database for Matrix Builder ─────────────────────────────────────
+// Globin superfamily — known structural homologs, diverse evolutionary distances
+const ALL_SEQS = [
+  { id:'mb_hum', label:'Myoglobin — Human',        group:'Myoglobin',
+    seq:'VLSEGDWQLVLNVWAKVEADVAGHGQDILIRLFKSHPETLEKFDRFKHLKTEAEMKASEDLKKHGVTVLTALGGILKKKGHHEAELKPLAQSHATKHKIPIKYLEFISDAIIHVLHSRHPGDFGADAQGAMNKALELFRKDIAAKYKELGYQG' },
+  { id:'mb_whl', label:'Myoglobin — Sperm Whale',  group:'Myoglobin',
+    seq:'VLSEGEWQLVLHVWAKVEADVAGHGQDILIRLFKSHPETLEKFDRFKHLKTEAEMKASEDLKKHGVTVLTALGGILKKKGHHEAELKPLAQSHATKHKIPIKYLEFISDAIIHVLHSRHPGDFGADAQGAMNKALELFRKDIAAKYKELGYQG' },
+  { id:'mb_hor', label:'Myoglobin — Horse',        group:'Myoglobin',
+    seq:'GLSDGEWQLVLNVWGKVEADLAGHGQEVLIRLFKGHPETLEKFDKFKHLKSEDEMKASEDLKKHGATVLTALGGILKKKGHHEAEIKPLAQSHATKHKIPVKYLEFISECIIQVLQSKHPGDFGADAQAAMNKALALFRKDIAAKYKDLGYQG' },
+  { id:'mb_chi', label:'Myoglobin — Chicken',      group:'Myoglobin',
+    seq:'GLSDGEWHLVLNVWGKVEADIPGHGQEVLIRLFKGHPETLEKFDKFKHLKSDDEMKASEDLKKHGATVLTALGGILKKKGHHEAEIKPLAQSHATKHKIPVKYLEFISECIVQVLQSKHPGDFGADAQAAMNKALALFRKDIAAKYKELGYQG' },
+  { id:'hba',    label:'Haemoglobin α — Human',    group:'Haemoglobin',
+    seq:'VLSPADKTNVKAAWGKVGAHAGEYGAEALERMFLSFPTTKTYFPHFDLSHGSAQVKGHGKKVADALTNAVAHVDDMPNALSALSDLHAHKLRVDPVNFKLLSHCLLVTLAAHLPAEFTPAVHASLDKFLASVSTVLTSKYR' },
+  { id:'hbb',    label:'Haemoglobin β — Human',    group:'Haemoglobin',
+    seq:'VHLTPEEKSAVTALWGKVNVDEVGGEALGRLLVVYPWTQRFFESFGDLSTPDAVMGNPKVKAHGKKVLGAFSDGLAHLDNLKGTFATLSELHCDKLHVDPENFRLLGNVLVCVLAHHFGKEFTPPVQAAYQKVVAGVANALAHKYH' },
+  { id:'hba_carp',label:'Haemoglobin α — Carp',   group:'Haemoglobin',
+    seq:'SLSDKDKAAVRALWSKIGNAHEEYGAETLERMFITYPSTKTYFPHFDLSPGSAQIKAHGKKVAAALIEAANHIDDIAGTLSKLSDLHAQKLRVDPVNFKLLGQCFLVVVAIHHPSALTPEVHASLDKFLATVATVLTSKYR' },
+  { id:'lgb',    label:'Leghemoglobin — Soybean',  group:'Plant Globin',
+    seq:'ALTVEQLNAQPKLKELGFHVVNAQFANAQFPETLEKFIRQHPETLEKFDKFQHLKTDAEMKASEDLKKHGTTVLTALGGILKKKGHHEAELKPLAQSHAKKHKIPVKYLEFISEAIIHVLHSRHPGDFGADAQGAMNKALELFRKDIAAKYKELGYQG' },
+  { id:'ngb',    label:'Neuroglobin — Human',      group:'Other Globins',
+    seq:'MARPEPELIRQSWRAVSRSPLEHGTVLARLFDYPDMKNYHPIDLPALESSPEHEVVKHSQPVYALAIVLQNLFGDVHEQLRALGQKLNTEQFKELASALQKLSDDHVNLITYLQQCPNAQPNPELQQLGLPEVHKQVFSALGPQLHHFLSFLRNMLKTPKAK' },
+  { id:'cgb',    label:'Cytoglobin — Human',       group:'Other Globins',
+    seq:'MERPAEIASAGPAKIINPNLKEEFAKSLQEMFQNMRKNLPKGLNPHSQMDYRDLNQQLSSGQLQGLRVRLPEDFVGLAQKLRAQMLEAMEQLQQHADSPTPALLHPIVNRLCQELHHRYHDALQKLRDQRDAFSSATGARLPTYRLEYLKQLEEILEQ' },
+];
+
+// ── Build log-odds matrix from active aligned sequence set ────────────────────
+function computeMatrix(seqs) {
+  // Pairwise substitution counts
+  const cnt = {};
+  AAS.forEach(a => { cnt[a] = {}; AAS.forEach(b => { cnt[a][b] = 0; }); });
+  let total = 0;
+
+  for (let i = 0; i < seqs.length; i++) {
+    for (let j = i + 1; j < seqs.length; j++) {
+      const s1 = seqs[i].seq, s2 = seqs[j].seq;
+      const len = Math.min(s1.length, s2.length);
+      for (let k = 0; k < len; k++) {
+        const a = s1[k].toUpperCase(), b = s2[k].toUpperCase();
+        if (AAS.includes(a) && AAS.includes(b)) {
+          cnt[a][b]++;
+          if (a !== b) cnt[b][a]++;
+          total++;
+        }
+      }
+    }
+  }
+
+  // Background frequencies (marginal, pseudocount=1)
+  const rowSum = {};
+  AAS.forEach(a => { rowSum[a] = AAS.reduce((s, b) => s + cnt[a][b], 0); });
+  const grand = AAS.reduce((s, a) => s + rowSum[a], 0);
+  const bg = {};
+  AAS.forEach(a => { bg[a] = (rowSum[a] + 1) / (grand + 20); });
+
+  // Symmetric substitution frequencies (pseudocount=0.5)
+  const obs = {};
+  AAS.forEach(a => { obs[a] = {}; AAS.forEach(b => { obs[a][b] = (cnt[a][b] + 0.5) / (grand + 10); }); });
+
+  // Log-odds scores (log base 2, scale ×2, rounded)
+  const mat = {};
+  AAS.forEach(a => {
+    mat[a] = {};
+    AAS.forEach(b => {
+      const expected = bg[a] * bg[b] * 2;
+      const score = Math.round(2 * Math.log2(obs[a][b] / expected));
+      mat[a][b] = Math.max(-12, Math.min(14, score));
+    });
+  });
+  return mat;
+}
+
+// ── Colour helpers ────────────────────────────────────────────────────────────
+function scoreColor(v, lo, hi) {
+  if (v > 0) {
+    const t = Math.min(v / Math.max(hi, 1), 1);
+    return `rgb(${Math.round(230 - t*30)},${Math.round(240 - t*60)},${Math.round(200 - t*60)})`;
+  } else if (v < 0) {
+    const t = Math.min(-v / Math.max(-lo, 1), 1);
+    return `rgb(${Math.round(220 - t*40)},${Math.round(230 - t*60)},${Math.round(255 - t*30)})`;
+  }
+  return '#f0f0f0';
+}
+
+// ── Shared styles ─────────────────────────────────────────────────────────────
+const S = {
+  h1:  { fontFamily:'Nunito,system-ui,sans-serif', fontSize:'1.6rem', fontWeight:700, color:'#2a7f8a', marginBottom:6 },
+  h2:  { fontFamily:'Nunito,system-ui,sans-serif', fontSize:'1.15rem', fontWeight:700, color:'#2a7f8a', marginBottom:8 },
+  h3:  { fontFamily:'Nunito,system-ui,sans-serif', fontSize:'0.95rem', fontWeight:700, color:'#333', marginBottom:6 },
+  tabs:{ display:'flex', gap:4, marginBottom:20, flexWrap:'wrap' },
+  tab: { padding:'8px 16px', border:'1px solid #b8dce2', borderRadius:6, cursor:'pointer', fontSize:'0.85rem', fontWeight:600, background:'#fff', color:'#2a7f8a', fontFamily:'Nunito,system-ui,sans-serif' },
+  tabA:{ padding:'8px 16px', border:'none', borderRadius:6, cursor:'pointer', fontSize:'0.85rem', fontWeight:700, background:'#2a7f8a', color:'#fff', fontFamily:'Nunito,system-ui,sans-serif' },
+  card:{ background:'#fff', border:'1px solid #dee2e6', borderRadius:8, padding:20, marginBottom:16 },
+  info:{ background:'#e8f4f6', border:'1px solid #b8dce2', borderRadius:8, padding:16, marginBottom:16 },
+  btn: { padding:'6px 14px', background:'#2a7f8a', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontSize:'0.82rem', fontWeight:600, fontFamily:'Nunito Sans,sans-serif' },
+  badge:{ display:'inline-block', padding:'2px 8px', borderRadius:6, fontSize:'0.7rem', fontWeight:700, background:'#e8f4f6', color:'#2a7f8a' },
+};
+
+// ── Reusable score matrix grid ────────────────────────────────────────────────
+function MatrixGrid({ matrix, onHover, hovCell, cellSz=24 }) {
+  const allV = AAS.flatMap(a => AAS.map(b => matrix[a][b]));
+  const lo = Math.min(...allV), hi = Math.max(...allV);
+  return (
+    <div style={{ overflowX:'auto' }}>
+      <table style={{ borderCollapse:'collapse', fontFamily:'monospace', fontSize:'0.68rem' }}>
+        <thead>
+          <tr>
+            <th style={{ width:cellSz }}></th>
+            {AAS.map(b => (
+              <th key={b} style={{ width:cellSz, textAlign:'center', color:'#2a7f8a', fontWeight:700, padding:'2px 0' }}>{b}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {AAS.map(a => (
+            <tr key={a}>
+              <td style={{ fontWeight:700, color:'#2a7f8a', textAlign:'right', paddingRight:3 }}>{a}</td>
+              {AAS.map(b => {
+                const v = matrix[a][b];
+                const isHov = hovCell && hovCell[0]===a && hovCell[1]===b;
+                return (
+                  <td key={b}
+                    style={{
+                      width:cellSz, height:cellSz, textAlign:'center', cursor:'pointer',
+                      background: isHov ? '#2a7f8a' : scoreColor(v, lo, hi),
+                      color: isHov ? '#fff' : '#333',
+                      fontWeight: a===b ? 700 : 400,
+                      border:'1px solid rgba(0,0,0,0.06)',
+                    }}
+                    onMouseEnter={() => onHover && onHover([a, b])}
+                    onMouseLeave={() => onHover && onHover(null)}
+                  >{v}</td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TAB 1 — History & Theory
+// ═══════════════════════════════════════════════════════════════════════════════
+function HistoryTab() {
+  const [section, setSection] = useState(0);
+  const sections = ['Why Score?', "Dayhoff's Method", 'PAM Units', 'Extrapolation'];
+  return (
+    <div>
+      <div style={S.tabs}>
+        {sections.map((s, i) => (
+          <button key={i} style={i===section ? S.tabA : S.tab} onClick={() => setSection(i)}>{s}</button>
+        ))}
+      </div>
+      {section === 0 && <WhyScoreSection />}
+      {section === 1 && <DayhoffSection />}
+      {section === 2 && <PAMUnitsSection />}
+      {section === 3 && <ExtrapolationSection />}
+    </div>
+  );
+}
+
+function WhyScoreSection() {
+  return (
+    <div>
+      <div style={S.card}>
+        <h3 style={S.h3}>The problem with simple match/mismatch</h3>
+        <p style={{ fontSize:'0.88rem', lineHeight:1.75, marginBottom:12 }}>
+          A naïve alignment scheme awards +1 for any identical residue and −1 for any mismatch.
+          This ignores a fundamental biological reality: <strong>not all substitutions are equally likely</strong>.
+        </p>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:14 }}>
+          {[
+            { pair:'Asp ↔ Glu (D ↔ E)', why:'Both negatively charged — frequently interchangeable', verdict:'Common', color:'#27ae60' },
+            { pair:'Asp ↔ Lys (D ↔ K)', why:'Opposite charges — rarely substitute', verdict:'Rare', color:'#c0392b' },
+            { pair:'Leu ↔ Ile (L ↔ I)', why:'Nearly identical shape & hydrophobicity', verdict:'Very common', color:'#27ae60' },
+            { pair:'Trp ↔ Gly (W ↔ G)', why:'Radically different size and properties', verdict:'Extremely rare', color:'#c0392b' },
+          ].map(({ pair, why, verdict, color }) => (
+            <div key={pair} style={{ border:'1px solid #dee2e6', borderRadius:6, padding:12 }}>
+              <div style={{ fontFamily:'monospace', fontWeight:700, marginBottom:4 }}>{pair}</div>
+              <div style={{ fontSize:'0.78rem', color:'#555', marginBottom:4 }}>{why}</div>
+              <div style={{ fontSize:'0.78rem', fontWeight:700, color }}>{verdict} in evolution</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ ...S.info, marginBottom:0 }}>
+          <strong>Key insight (Dayhoff, 1978):</strong> A good scoring matrix should award a high score
+          when two amino acids are substituted <em>more often than expected by chance</em>, and a
+          negative score when they substitute less often. The score should be a <strong>log-odds ratio</strong>:
+          log( observed frequency / expected frequency ).
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DayhoffSection() {
+  const steps = [
+    { n:1, title:'Collect closely related protein families',
+      text:'Dayhoff curated 71 groups of protein sequences from related organisms. Crucially, only sequences sharing >85% identity were included — close enough that each aligned column is very likely to be a true homolog, and any difference represents exactly one evolutionary event.' },
+    { n:2, title:'Infer phylogenetic trees and ancestral sequences',
+      text:'For each family, a tree was built and ancestral sequences reconstructed. This allowed the authors to attribute each observed amino acid change to a specific branch of the tree, avoiding double-counting the same mutation in multiple descendants.' },
+    { n:3, title:'Count accepted point mutations (APMs)',
+      text:'Every single amino-acid change along each branch was recorded. The word "accepted" is key: these are mutations that survived natural selection. This naturally excludes lethal or strongly deleterious changes, capturing the biologically feasible substitution space.' },
+    { n:4, title:'Build a 20×20 mutation probability matrix (PAM1)',
+      text:'Counts were normalized: M[a][b] = probability that residue a mutates to b in one PAM unit of evolutionary time. The diagonal represents the probability of no change. Each row sums to 1.' },
+    { n:5, title:'Convert to log-odds scores',
+      text:'Score(a,b) = round( 10 × log₁₀( M[a→b] / f(b) ) ) where f(b) is the background frequency of amino acid b. A positive score means the substitution is more common than expected at random; negative means less common.' },
+  ];
+  return (
+    <div style={S.card}>
+      <h3 style={S.h3}>Dayhoff's 5-step construction pipeline</h3>
+      <p style={{ fontSize:'0.83rem', color:'#666', marginBottom:14 }}>
+        Published in the <em>Atlas of Protein Sequence and Structure</em> (1978), this methodology
+        established the framework used by all subsequent scoring matrices.
+      </p>
+      {steps.map(s => (
+        <div key={s.n} style={{ display:'flex', gap:14, marginBottom:14 }}>
+          <div style={{ width:30, height:30, borderRadius:'50%', background:'#2a7f8a', color:'#fff',
+            display:'flex', alignItems:'center', justifyContent:'center', fontWeight:700, fontSize:'0.85rem', flexShrink:0, marginTop:2 }}>
+            {s.n}
+          </div>
+          <div>
+            <div style={{ fontWeight:700, fontSize:'0.88rem', marginBottom:3 }}>{s.title}</div>
+            <p style={{ fontSize:'0.82rem', lineHeight:1.65, color:'#444' }}>{s.text}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PAMUnitsSection() {
+  return (
+    <div>
+      <div style={S.card}>
+        <div style={{ background:'#2a7f8a', color:'#fff', borderRadius:6, padding:14, marginBottom:14, textAlign:'center' }}>
+          <div style={{ fontSize:'1.05rem', fontWeight:700 }}>PAM = Point Accepted Mutation</div>
+          <div style={{ fontSize:'0.82rem', marginTop:4, opacity:0.9 }}>
+            1 PAM unit = evolutionary distance at which 1% of amino acid positions have changed, on average
+          </div>
+        </div>
+        <p style={{ fontSize:'0.88rem', lineHeight:1.75, marginBottom:14 }}>
+          PAM is a measure of <strong>evolutionary distance</strong>, not sequence identity.
+          At PAM1, sequences are so similar that only ~1% of residues differ.
+          At PAM250, sequences have undergone so much change that multiple substitutions at the same
+          site are common — observed identity can be as low as 20%.
+        </p>
+        <div style={{ overflowX:'auto' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.82rem' }}>
+            <thead>
+              <tr style={{ background:'#f8f9fa' }}>
+                {['PAM value','Expected % difference','Typical use case'].map(h => (
+                  <th key={h} style={{ padding:'8px 10px', textAlign:'left', borderBottom:'2px solid #dee2e6', fontFamily:'Nunito,sans-serif' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ['PAM 1',  '~1%',  'Viral strains, isoforms'],
+                ['PAM 30', '~17%', 'Species variants of the same protein'],
+                ['PAM 80', '~33%', 'Proteins from different phyla'],
+                ['PAM 120','~44%', 'Moderately diverged families (≈ BLOSUM62)'],
+                ['PAM 250','~80%', 'Ancient divergence, remote homologs'],
+              ].map(([p,d,u],i) => (
+                <tr key={p} style={{ background: i%2===0 ? '#fff' : '#f8f9fa' }}>
+                  <td style={{ padding:'7px 10px', fontWeight:700, color:'#2a7f8a', fontFamily:'monospace' }}>{p}</td>
+                  <td style={{ padding:'7px 10px' }}>{d}</td>
+                  <td style={{ padding:'7px 10px', color:'#555' }}>{u}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div style={S.info}>
+        <strong>Choosing the right PAM matrix:</strong> Use a lower PAM number when searching for close
+        homologs (it rewards conservation), and a higher PAM number for detecting remote evolutionary
+        relationships (it tolerates more change). In practice, PAM250 (or its equivalent BLOSUM45)
+        is used for database searches for distant homologs.
+      </div>
+    </div>
+  );
+}
+
+function ExtrapolationSection() {
+  const [showMath, setShowMath] = useState(false);
+  return (
+    <div>
+      <div style={S.card}>
+        <h3 style={S.h3}>Matrix exponentiation: PAM1 → PAM250</h3>
+        <p style={{ fontSize:'0.88rem', lineHeight:1.75, marginBottom:12 }}>
+          One of Dayhoff's most elegant contributions: you never need to directly measure distant
+          homologs (which are hard to align reliably). Instead, PAM<em>n</em> is derived by
+          raising the PAM1 <em>probability</em> matrix to the <em>n</em>th power.
+        </p>
+        <div style={{ background:'#f8f9fa', border:'1px solid #dee2e6', borderRadius:6, padding:14, marginBottom:12, textAlign:'center', fontFamily:'monospace', fontSize:'0.88rem' }}>
+          PAM<em>n</em> = PAM1<sup><em>n</em></sup>
+        </div>
+        <p style={{ fontSize:'0.88rem', lineHeight:1.75, marginBottom:12 }}>
+          This works because protein evolution is modelled as a <strong>Markov process</strong>:
+          the probability of residue <em>a</em> becoming residue <em>b</em> in two independent
+          steps is Σ<sub>c</sub> P(a→c) × P(c→b), which is exactly the matrix product P².
+        </p>
+        <button style={S.btn} onClick={() => setShowMath(!showMath)}>
+          {showMath ? 'Hide' : 'Show'} log-odds conversion
+        </button>
+        {showMath && (
+          <div style={{ marginTop:12, background:'#e8f4f6', borderRadius:6, padding:14, fontSize:'0.83rem', lineHeight:1.8 }}>
+            <p><strong>Step 1</strong> — Exponentiate: compute M = PAM1<sup>n</sup>. Now M[a][b] = P(b | a, n PAM units).</p>
+            <p><strong>Step 2</strong> — Normalize by background: compute the odds ratio = M[a][b] / f(b), where f(b) is the background frequency of amino acid b.</p>
+            <p><strong>Step 3</strong> — Log-transform and round:</p>
+            <div style={{ fontFamily:'monospace', textAlign:'center', margin:'6px 0' }}>
+              score(a,b) = round( 10 × log₁₀( M[a→b] / f(b) ) )
+            </div>
+            <p><strong>Positive</strong> score → substitution occurs more than chance; <strong>negative</strong> → less than chance.</p>
+          </div>
+        )}
+      </div>
+      <div style={S.info}>
+        <strong>PAM vs BLOSUM at a glance</strong><br/>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:10, fontSize:'0.82rem' }}>
+          <div>
+            <strong style={{ color:'#2a7f8a' }}>PAM (Dayhoff 1978)</strong>
+            <ul style={{ paddingLeft:16, marginTop:4, lineHeight:1.7 }}>
+              <li>Derived from closely related sequences (&gt;85% identity)</li>
+              <li>Higher PAM → more divergent</li>
+              <li>Extrapolated by matrix exponentiation</li>
+            </ul>
+          </div>
+          <div>
+            <strong style={{ color:'#2a7f8a' }}>BLOSUM (Henikoff 1992)</strong>
+            <ul style={{ paddingLeft:16, marginTop:4, lineHeight:1.7 }}>
+              <li>Derived from conserved blocks in diverse alignments</li>
+              <li>Higher BLOSUM → more similar sequences used</li>
+              <li>No extrapolation — each matrix computed directly</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TAB 2 — Matrix Builder
+// ═══════════════════════════════════════════════════════════════════════════════
+function MatrixBuilderTab() {
+  const [active, setActive] = useState(ALL_SEQS.map(s => s.id));
+  const [hov, setHov] = useState(null);
+
+  const toggle = id => setActive(prev =>
+    prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+  );
+
+  const activeSeqs = ALL_SEQS.filter(s => active.includes(s.id));
+  const matrix = useMemo(() => {
+    if (activeSeqs.length < 2) return null;
+    return computeMatrix(activeSeqs);
+  }, [activeSeqs.map(s => s.id).join(',')]);
+
+  const groups = [...new Set(ALL_SEQS.map(s => s.group))];
+
+  return (
+    <div>
+      {/* Sequence selector */}
+      <div style={S.card}>
+        <h3 style={S.h3}>
+          Protein Sequence Database
+          <span style={{ ...S.badge, marginLeft:8 }}>{activeSeqs.length} / {ALL_SEQS.length} active</span>
+        </h3>
+        <p style={{ fontSize:'0.82rem', color:'#666', marginBottom:12 }}>
+          Toggle sequences on and off. The scoring matrix is recomputed from pairwise substitution
+          counts across all <em>active</em> sequence pairs. Observe how the matrix changes as you
+          add divergent sequences or restrict to a single protein family.
+        </p>
+        {groups.map(g => (
+          <div key={g} style={{ marginBottom:10 }}>
+            <div style={{ fontSize:'0.78rem', fontWeight:700, color:'#2a7f8a', marginBottom:5, textTransform:'uppercase', letterSpacing:'0.05em' }}>{g}</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
+              {ALL_SEQS.filter(s => s.group === g).map(s => {
+                const on = active.includes(s.id);
+                return (
+                  <div key={s.id}
+                    style={{ display:'flex', alignItems:'center', gap:10, padding:'7px 12px',
+                      border:`1px solid ${on ? '#2a7f8a' : '#dee2e6'}`, borderRadius:6,
+                      background: on ? '#e8f4f6' : '#f8f9fa', cursor:'pointer' }}
+                    onClick={() => toggle(s.id)}>
+                    <div style={{ width:16, height:16, borderRadius:3, border:`2px solid ${on ? '#2a7f8a' : '#aaa'}`,
+                      background: on ? '#2a7f8a' : '#fff', flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                      {on && <span style={{ color:'#fff', fontSize:'0.65rem', fontWeight:700 }}>✓</span>}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight:600, fontSize:'0.82rem' }}>{s.label}</div>
+                      <div style={{ fontFamily:'monospace', fontSize:'0.68rem', color:'#888' }}>{s.seq.slice(0,36)}…</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Derived matrix */}
+      <div style={S.card}>
+        <h3 style={S.h3}>Derived Scoring Matrix</h3>
+        {activeSeqs.length < 2
+          ? <p style={{ color:'#888', fontStyle:'italic', fontSize:'0.85rem' }}>Select at least 2 sequences.</p>
+          : <>
+              <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginBottom:10 }}>
+                <div style={{ fontSize:'0.78rem', padding:'2px 8px', borderRadius:4, background:'rgba(180,230,200,0.5)' }}>positive = more common than chance</div>
+                <div style={{ fontSize:'0.78rem', padding:'2px 8px', borderRadius:4, background:'rgba(180,210,240,0.5)' }}>negative = less common than chance</div>
+                <div style={{ fontSize:'0.78rem', color:'#888' }}>Hover to inspect</div>
+              </div>
+              <MatrixGrid matrix={matrix} onHover={setHov} hovCell={hov} />
+              {hov && (
+                <div style={{ marginTop:10, padding:10, background:'#f8f9fa', border:'1px solid #dee2e6', borderRadius:6, fontSize:'0.82rem' }}>
+                  <strong>{AA_NAMES[hov[0]]} ({hov[0]}) ↔ {AA_NAMES[hov[1]]} ({hov[1]})</strong>:
+                  score <strong style={{ color: matrix[hov[0]][hov[1]] > 0 ? '#27ae60' : matrix[hov[0]][hov[1]] < 0 ? '#c0392b' : '#888' }}>
+                    {matrix[hov[0]][hov[1]]}
+                  </strong>
+                  <span style={{ color:'#666', marginLeft:8 }}>
+                    {matrix[hov[0]][hov[1]] > 0
+                      ? '— substitution more frequent than random expectation'
+                      : matrix[hov[0]][hov[1]] < 0
+                      ? '— substitution less frequent than random expectation'
+                      : '— at random expectation'}
+                  </span>
+                </div>
+              )}
+            </>
+        }
+      </div>
+
+      {/* Observation guide */}
+      <div style={S.info}>
+        <strong style={{ color:'#2a7f8a' }}>Things to try</strong>
+        <ul style={{ fontSize:'0.83rem', lineHeight:1.8, paddingLeft:18, marginTop:6 }}>
+          <li><strong>Only myoglobin sequences:</strong> The matrix captures narrow globin substitution patterns — very high scores for L↔I, K↔R but high scores only within that family.</li>
+          <li><strong>Add leghemoglobin (plant):</strong> The most divergent globin. Watch scores drop for pairs that differ between animal and plant globins.</li>
+          <li><strong>Add neuroglobin and cytoglobin:</strong> These vertebrate globins add diversity — the matrix broadens and scores regress toward zero.</li>
+          <li><strong>Two almost identical seqs (human + sperm whale myoglobin only):</strong> The matrix becomes extreme — very high match scores, very negative mismatch scores. Small samples = overfit.</li>
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TAB 3 — PAM Explorer
+// ═══════════════════════════════════════════════════════════════════════════════
+const PAM_MATRICES = { 1: PAM1, 30: PAM30, 250: PAM250 };
+
+function PamExplorerTab() {
+  const [pamA, setPamA] = useState(250);
+  const [pamB, setPamB] = useState(null); // optional comparison
+  const [hov, setHov] = useState(null);
+
+  const nearestA = [1, 30, 250].reduce((a, b) => Math.abs(b - pamA) < Math.abs(a - pamA) ? b : a);
+  const matA = PAM_MATRICES[nearestA];
+  const matB = pamB ? PAM_MATRICES[pamB] : null;
+
+  const allV = Object.values(PAM250).flatMap(r => Object.values(r));
+  const lo = Math.min(...allV), hi = Math.max(...allV);
+
+  return (
+    <div>
+      <div style={S.card}>
+        <h3 style={S.h3}>Explore PAM matrices</h3>
+        <p style={{ fontSize:'0.83rem', color:'#666', marginBottom:14 }}>
+          As PAM number increases, proteins are more evolutionarily distant. The matrix becomes
+          more permissive — scores for conservative substitutions decrease and the range narrows.
+        </p>
+
+        {/* Slider */}
+        <div style={{ marginBottom:16 }}>
+          <label style={{ fontSize:'0.83rem', fontWeight:600 }}>
+            PAM distance: <span style={{ color:'#2a7f8a' }}>PAM {pamA}</span>
+            {nearestA !== pamA && <span style={{ color:'#888', fontSize:'0.75rem' }}> → showing PAM {nearestA}</span>}
+          </label>
+          <input type="range" min={1} max={250} value={pamA} onChange={e => setPamA(+e.target.value)}
+            style={{ width:'100%', marginTop:6, accentColor:'#2a7f8a' }} />
+          <div style={{ display:'flex', justifyContent:'space-between', fontSize:'0.72rem', color:'#888', marginTop:2 }}>
+            <span>PAM 1 — very close</span><span>PAM 30</span><span>PAM 250 — distant</span>
+          </div>
+        </div>
+
+        {/* Comparison selector */}
+        <div style={{ display:'flex', gap:6, alignItems:'center', marginBottom:16, flexWrap:'wrap' }}>
+          <span style={{ fontSize:'0.82rem', fontWeight:600 }}>Compare with:</span>
+          {[null, 1, 30, 250].map(v => (
+            <button key={String(v)} style={pamB === v ? S.tabA : S.tab}
+              onClick={() => setPamB(v)}>
+              {v === null ? 'None' : `PAM ${v}`}
+            </button>
+          ))}
+        </div>
+
+        {matB && (
+          <div style={{ fontSize:'0.78rem', color:'#555', marginBottom:10 }}>
+            Outlined cells show where PAM {nearestA} differs from PAM {pamB}:
+            <span style={{ border:'2px solid #27ae60', padding:'1px 6px', borderRadius:3, marginLeft:6, fontSize:'0.72rem' }}>green border = higher in PAM {nearestA}</span>
+            <span style={{ border:'2px solid #c0392b', padding:'1px 6px', borderRadius:3, marginLeft:4, fontSize:'0.72rem' }}>red border = lower</span>
+          </div>
+        )}
+
+        {/* Matrix */}
+        <div style={{ overflowX:'auto' }}>
+          <table style={{ borderCollapse:'collapse', fontFamily:'monospace', fontSize:'0.68rem' }}>
+            <thead>
+              <tr>
+                <th style={{ width:24 }}></th>
+                {AAS.map(b => <th key={b} style={{ width:24, textAlign:'center', color:'#2a7f8a', fontWeight:700, padding:'2px 0' }}>{b}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {AAS.map(a => (
+                <tr key={a}>
+                  <td style={{ fontWeight:700, color:'#2a7f8a', textAlign:'right', paddingRight:3 }}>{a}</td>
+                  {AAS.map(b => {
+                    const v = matA[a][b];
+                    const cv = matB ? matB[a][b] : null;
+                    const diff = cv !== null ? v - cv : 0;
+                    const isHov = hov && hov[0]===a && hov[1]===b;
+                    return (
+                      <td key={b}
+                        style={{
+                          width:24, height:24, textAlign:'center', cursor:'pointer',
+                          background: isHov ? '#2a7f8a' : scoreColor(v, lo, hi),
+                          color: isHov ? '#fff' : '#333',
+                          fontWeight: a===b ? 700 : 400,
+                          border:'1px solid rgba(0,0,0,0.06)',
+                          outline: cv !== null && diff !== 0 ? `2px solid ${diff>0 ? '#27ae60' : '#c0392b'}` : 'none',
+                        }}
+                        onMouseEnter={() => setHov([a, b])}
+                        onMouseLeave={() => setHov(null)}
+                      >{v}</td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {hov && (
+          <div style={{ marginTop:10, padding:10, background:'#f8f9fa', border:'1px solid #dee2e6', borderRadius:6, fontSize:'0.82rem' }}>
+            <strong>{AA_NAMES[hov[0]]} ({hov[0]}) ↔ {AA_NAMES[hov[1]]} ({hov[1]})</strong>
+            {' — '}PAM {nearestA}: <strong>{matA[hov[0]][hov[1]]}</strong>
+            {matB && <span>　|　PAM {pamB}: <strong>{matB[hov[0]][hov[1]]}</strong>
+              {' '}Δ = <strong style={{ color: matA[hov[0]][hov[1]]-matB[hov[0]][hov[1]] > 0 ? '#27ae60' : '#c0392b' }}>
+                {matA[hov[0]][hov[1]]-matB[hov[0]][hov[1]] > 0 ? '+' : ''}{matA[hov[0]][hov[1]]-matB[hov[0]][hov[1]]}
+              </strong></span>}
+          </div>
+        )}
+      </div>
+
+      {/* Spotlights */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+        {[
+          { title:'Conservative pairs', pairs:[['L','I'],['K','R'],['D','E'],['S','T'],['F','Y']], note:'Score trend across PAM levels' },
+          { title:'Non-conservative pairs', pairs:[['W','G'],['C','K'],['P','W'],['F','D'],['M','R']], note:'Should stay negative throughout' },
+        ].map(({ title, pairs, note }) => (
+          <div key={title} style={S.card}>
+            <h3 style={{ ...S.h3, fontSize:'0.85rem' }}>{title}</h3>
+            <p style={{ fontSize:'0.76rem', color:'#888', marginBottom:8 }}>{note}</p>
+            <table style={{ width:'100%', fontSize:'0.78rem', borderCollapse:'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign:'left', paddingBottom:4, color:'#555' }}>Pair</th>
+                  <th style={{ textAlign:'center', paddingBottom:4, color:'#555' }}>PAM1</th>
+                  <th style={{ textAlign:'center', paddingBottom:4, color:'#555' }}>PAM30</th>
+                  <th style={{ textAlign:'center', paddingBottom:4, color:'#555' }}>PAM250</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pairs.map(([a, b]) => (
+                  <tr key={`${a}${b}`}>
+                    <td style={{ padding:'3px 0', fontFamily:'monospace', fontWeight:600 }}>{a}↔{b}</td>
+                    {[PAM1, PAM30, PAM250].map((m, i) => {
+                      const v = m[a][b];
+                      return (
+                        <td key={i} style={{ textAlign:'center', fontFamily:'monospace',
+                          color: v>0 ? '#27ae60' : v<0 ? '#c0392b' : '#888', fontWeight:600 }}>{v}</td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TAB 4 — Quiz
+// ═══════════════════════════════════════════════════════════════════════════════
+const QUIZ = [
+  { q:'What does PAM stand for?',
+    opts:['Protein Alignment Matrix','Point Accepted Mutation','Parallel Amino acid Model','Pairwise Alignment Metric'],
+    ans:1, exp:'PAM = Point Accepted Mutation. Each PAM unit represents ~1 accepted mutation per 100 amino acid positions — a measure of evolutionary distance.' },
+  { q:'Why did Dayhoff restrict data collection to sequences with >85% identity?',
+    opts:['To maximize sequence diversity','To ensure aligned columns represent true homologous positions','To avoid phylogenetic tree construction','To include as many substitution types as possible'],
+    ans:1, exp:'At very high identity, every aligned column very likely represents the same ancestral position. More divergent sequences introduce alignment uncertainty and require complex gap handling.' },
+  { q:'PAM250 is obtained from PAM1 by:',
+    opts:['Directly measuring proteins that share 20% identity','Multiplying the PAM1 probability matrix by itself 250 times','Averaging 250 independent PAM1 estimates','Removing rare substitutions from PAM1'],
+    ans:1, exp:'Because protein evolution is a Markov process, PAMₙ = PAM1ⁿ (matrix raised to the nth power). This extrapolation from closely related to distantly related sequences is Dayhoff\'s key contribution.' },
+  { q:'A score of +4 for L↔I in a PAM matrix means:',
+    opts:['L and I are always identical in alignments','L→I substitutions occur more often than expected by chance','L and I never substitute for each other','L→I substitution frequency equals background frequency'],
+    ans:1, exp:'Positive log-odds score = observed substitution frequency > expected random frequency (product of background frequencies). Larger values indicate stronger evolutionary conservation.' },
+  { q:'Which PAM matrix would you choose to detect very ancient, remote homologs?',
+    opts:['PAM 1','PAM 30','PAM 80','PAM 250'],
+    ans:3, exp:'PAM250 is calibrated for ~80% sequence divergence. It tolerates many substitutions so it can detect weak similarity signals between ancient homologs. PAM1 would give high penalties for the divergence present in such alignments.' },
+  { q:'Diagonal entries of a scoring matrix (e.g., A vs A) are always:',
+    opts:['Zero (no change = no information)','Negative (conservation is penalised)','Positive (conservation is favoured)','Depend only on the background frequency'],
+    ans:2, exp:'Observing the same residue at an aligned position is always more probable than random chance, so the log-odds score is always positive. Rare amino acids (like W, C) have higher match scores than common ones.' },
+  { q:'What fundamental difference separates BLOSUM from PAM data collection?',
+    opts:['BLOSUM uses nucleotide sequences','BLOSUM counts substitutions in conserved blocks from diverse protein families','BLOSUM requires a phylogenetic tree','BLOSUM is extrapolated from a single matrix like PAM'],
+    ans:1, exp:'Henikoff & Henikoff (1992) used the BLOCKS database — ungapped conserved regions from diverse protein families. Each BLOSUM matrix is computed directly from its own dataset; no matrix exponentiation is needed.' },
+  { q:'In the Matrix Builder, removing very divergent sequences (e.g., leghemoglobin) typically:',
+    opts:['Makes all scores zero','Decreases scores for all amino acid pairs','Increases scores for conserved pairs within the remaining family','Has no effect because scores are normalised'],
+    ans:2, exp:'Divergent sequences introduce substitutions rare within the core family, diluting the signal. Removing them concentrates the dataset on a conserved subfamily, increasing log-odds scores for pairs common within it.' },
+];
+
+function QuizTab() {
+  const [answers, setAnswers] = useState({});
+  const [revealed, setRevealed] = useState({});
+  const answered = Object.keys(answers).length;
+  const correct = Object.entries(answers).filter(([i, a]) => a === QUIZ[+i].ans).length;
+
+  return (
+    <div>
+      <div style={{ ...S.info, marginBottom:16, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <div style={{ fontWeight:700, color:'#2a7f8a', fontSize:'0.9rem' }}>Knowledge Check — Scoring Matrices & PAM</div>
+        <div style={{ fontSize:'0.82rem', color:'#555' }}>{answered}/{QUIZ.length} answered · {correct} correct</div>
+      </div>
+      <div style={{ height:6, background:'#dee2e6', borderRadius:3, marginBottom:16 }}>
+        <div style={{ height:6, borderRadius:3, background:'#2a7f8a', width:`${answered/QUIZ.length*100}%`, transition:'width 0.3s' }} />
+      </div>
+
+      {QUIZ.map((q, i) => {
+        const chosen = answers[i];
+        const show = revealed[i];
+        const ok = chosen === q.ans;
+        return (
+          <div key={i} style={{ ...S.card, borderLeft:`4px solid ${chosen===undefined ? '#dee2e6' : ok ? '#27ae60' : '#c0392b'}`, marginBottom:12 }}>
+            <div style={{ fontSize:'0.88rem', fontWeight:600, marginBottom:10 }}>{i+1}. {q.q}</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:5, marginBottom:8 }}>
+              {q.opts.map((opt, j) => {
+                let bg='#f8f9fa', bdr='#dee2e6', col='#333';
+                if (chosen !== undefined) {
+                  if (j===q.ans) { bg='#d4edda'; bdr='#27ae60'; col='#155724'; }
+                  else if (j===chosen) { bg='#f8d7da'; bdr='#c0392b'; col='#721c24'; }
+                }
+                return (
+                  <button key={j} disabled={chosen!==undefined}
+                    onClick={() => { setAnswers(p=>({...p,[i]:j})); setRevealed(p=>({...p,[i]:true})); }}
+                    style={{ textAlign:'left', padding:'8px 12px', border:`1px solid ${bdr}`, borderRadius:6,
+                      background:bg, color:col, cursor:chosen!==undefined?'default':'pointer',
+                      fontSize:'0.82rem', fontFamily:'Nunito Sans,sans-serif' }}>
+                    {String.fromCharCode(65+j)}. {opt}
+                  </button>
+                );
+              })}
+            </div>
+            {show && (
+              <div style={{ background:'#e8f4f6', borderRadius:6, padding:10, fontSize:'0.8rem', color:'#2a7f8a', lineHeight:1.65 }}>
+                <strong>Explanation:</strong> {q.exp}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {answered === QUIZ.length && (
+        <div style={{ ...S.card, background:'#2a7f8a', color:'#fff', textAlign:'center', marginTop:8 }}>
+          <div style={{ fontSize:'1.2rem', fontWeight:700, marginBottom:4 }}>Score: {correct}/{QUIZ.length}</div>
+          <div style={{ fontSize:'0.85rem', opacity:0.9 }}>
+            {correct === QUIZ.length
+              ? 'Excellent! You understand scoring matrices deeply.'
+              : correct >= 6
+              ? 'Good work! Review the highlighted questions above.'
+              : 'Keep going — revisit the Theory and PAM Explorer tabs.'}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Root App
+// ═══════════════════════════════════════════════════════════════════════════════
+const TABS = ['Theory', 'Matrix Builder', 'PAM Explorer', 'Quiz'];
+
+function App() {
+  const [tab, setTab] = useState(0);
+  return (
+    <div style={{ paddingTop:20 }}>
+      <h1 style={S.h1}>Scoring Matrices for Sequence Alignment</h1>
+      <p style={{ fontSize:'0.88rem', color:'#6c757d', marginBottom:20 }}>
+        From Dayhoff's accepted point mutations to PAM250 — build your own matrix from real proteins,
+        explore how PAM distance changes scores, and test your knowledge.
+      </p>
+      <div style={S.tabs}>
+        {TABS.map((t, i) => (
+          <button key={i} style={i===tab ? S.tabA : S.tab} onClick={() => setTab(i)}>{t}</button>
+        ))}
+      </div>
+      {tab === 0 && <HistoryTab />}
+      {tab === 1 && <MatrixBuilderTab />}
+      {tab === 2 && <PamExplorerTab />}
+      {tab === 3 && <QuizTab />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
