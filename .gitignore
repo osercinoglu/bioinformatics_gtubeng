@@ -1,0 +1,7 @@
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+
+# HMMER exercise working directories
+exercises/hmmer_build_work/
+exercises/hmmer_search_work/
