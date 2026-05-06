@@ -5,3 +5,11 @@ __pycache__/
 # HMMER exercise working directories
 exercises/hmmer_build_work/
 exercises/hmmer_search_work/
+
+# 5_* exercise working directories (BLAST / MSA / Phylogeny)
+exercises/blast_work/
+exercises/msa_work/
+exercises/phylo_work/
+
+# Local design/spec scratchpad — not part of the public repo
+docs/superpowers/
